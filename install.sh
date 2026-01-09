@@ -91,6 +91,44 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# ============================================================
+# Install dependencies
+# ============================================================
+install_dependencies() {
+    local missing=()
+    
+    # Check required commands
+    for cmd in curl tar grep sed; do
+        if ! command -v $cmd &> /dev/null; then
+            missing+=($cmd)
+        fi
+    done
+    
+    if [ ${#missing[@]} -eq 0 ]; then
+        log "All dependencies are installed"
+        return 0
+    fi
+    
+    log "Installing missing dependencies: ${missing[*]}"
+    
+    # Detect package manager
+    if command -v apt-get &> /dev/null; then
+        apt-get update -qq
+        apt-get install -y -qq "${missing[@]}"
+    elif command -v yum &> /dev/null; then
+        yum install -y -q "${missing[@]}"
+    elif command -v apk &> /dev/null; then
+        apk add --quiet "${missing[@]}"
+    else
+        log "ERROR: Could not detect package manager. Please install manually: ${missing[*]}"
+        exit 1
+    fi
+    
+    log "Dependencies installed successfully"
+}
+
+install_dependencies
+
 # Detect architecture
 ARCH=$(get_arch)
 if [ "$ARCH" == "unsupported" ]; then
