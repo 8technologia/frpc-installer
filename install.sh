@@ -600,8 +600,24 @@ STATE_FILE="$INSTALL_DIR/.healthcheck_state"
 WEBHOOK_FILE="$INSTALL_DIR/.webhook_url"
 DOWN_FLAG="$INSTALL_DIR/.frpc_down"
 MAX_RESTARTS_PER_HOUR=5
+MAX_LOG_SIZE=1048576  # 1MB
+MAX_LOG_BACKUPS=3
+
+rotate_log() {
+    if [ -f "$LOG_FILE" ]; then
+        local size=$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)
+        if [ "$size" -gt "$MAX_LOG_SIZE" ]; then
+            for i in $(seq $((MAX_LOG_BACKUPS-1)) -1 1); do
+                [ -f "${LOG_FILE}.$i" ] && mv "${LOG_FILE}.$i" "${LOG_FILE}.$((i+1))"
+            done
+            mv "$LOG_FILE" "${LOG_FILE}.1"
+            touch "$LOG_FILE"
+        fi
+    fi
+}
 
 log() {
+    rotate_log
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
