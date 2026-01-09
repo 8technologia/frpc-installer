@@ -10,38 +10,51 @@ Script tự động cài đặt frpc với cấu hình ngẫu nhiên.
 - ✅ Random username/password
 - ✅ Tự động cấu hình systemd (auto-start khi boot)
 - ✅ Gửi thông tin về webhook (tùy chọn)
+- ✅ Retry download 3 lần nếu thất bại
+- ✅ Kiểm tra network, disk space
+- ✅ Hỗ trợ update và uninstall
 
-## Sử dụng
+## Cài đặt
 
-### Cài đặt cơ bản
+### Cài mới
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/frpc-installer/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash
 ```
 
-### Với tên box tùy chọn
+### Với tên box
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/frpc-installer/main/install.sh | sudo bash -s -- --name "Box-HaNoi-01"
+curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --name "Box-HaNoi-01"
 ```
 
 ### Với webhook
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/frpc-installer/main/install.sh | sudo bash -s -- --webhook "https://webhook.site/your-id"
+curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --webhook "https://webhook.site/your-id"
 ```
 
 ### Đầy đủ tham số
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/frpc-installer/main/install.sh | sudo bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- \
   --name "Box-HaNoi-01" \
   --webhook "https://webhook.site/your-id"
 ```
 
-## Kết quả sau cài đặt
+### Cập nhật
 
-Script sẽ in ra:
+```bash
+curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --update
+```
+
+### Gỡ cài đặt
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --uninstall
+```
+
+## Kết quả sau cài đặt
 
 ```
 Box Name: Box-HaNoi-01
@@ -63,58 +76,12 @@ Admin API:
   Password: x9m3k7p2a5b8c1d4
 ```
 
-## Webhook Data
-
-Nếu cung cấp `--webhook`, script sẽ POST JSON:
-
-```json
-{
-  "timestamp": "2026-01-09T14:54:00+07:00",
-  "hostname": "armbian",
-  "box_name": "Box-HaNoi-01",
-  "architecture": "arm64",
-  "frpc_version": "0.66.0",
-  "server": "103.166.185.156:7000",
-  "public_ip": "123.45.67.89",
-  "proxies": {
-    "socks5": {
-      "port": 51234,
-      "address": "103.166.185.156:51234",
-      "username": "...",
-      "password": "..."
-    },
-    "http": {
-      "port": 52234,
-      "address": "103.166.185.156:52234",
-      "username": "...",
-      "password": "..."
-    },
-    "admin_api": {
-      "port": 53234,
-      "address": "103.166.185.156:53234",
-      "username": "admin",
-      "password": "..."
-    }
-  },
-  "bandwidth_limit": "8MB",
-  "status": "success"
-}
-```
-
 ## Quản lý service
 
 ```bash
-# Xem status
-systemctl status frpc
-
-# Restart
-systemctl restart frpc
-
-# Xem logs
-journalctl -u frpc -f
-
-# Stop
-systemctl stop frpc
+systemctl status frpc      # Xem status
+systemctl restart frpc     # Restart
+journalctl -u frpc -f      # Xem logs
 ```
 
 ## Yêu cầu trên FRP Server

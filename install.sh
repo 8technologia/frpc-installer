@@ -5,9 +5,9 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash
-#   curl -fsSL ... | sudo bash -s -- --webhook "https://webhook.site/xxx"
-#   curl -fsSL ... | sudo bash -s -- --name "Box-01" --webhook "https://..."
-#   curl -fsSL ... | sudo bash -s -- --uninstall
+#   curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --webhook "https://webhook.site/xxx"
+#   curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --name "Box-01" --webhook "https://..."
+#   curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --uninstall
 #
 
 set -e
