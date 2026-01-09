@@ -147,7 +147,6 @@ check_network() {
 verify_service() {
     log "Verifying frpc service..."
     local max_attempts=15
-    local retry_count=0
     
     ERROR_MESSAGE=""
     PROXIES_RUNNING=0
@@ -157,16 +156,24 @@ verify_service() {
         if systemctl is-active --quiet frpc; then
             FRPC_RUNNING=true
             
-            # Check admin API and proxy status
-            local status_response=$(curl -s --max-time 5 -u "$ADMIN_USER:$ADMIN_PASS" "http://127.0.0.1:7400/api/status" 2>/dev/null)
+            # Try without auth first (localhost), then with auth
+            local status_response=$(curl -s --max-time 5 "http://127.0.0.1:7400/api/status" 2>/dev/null)
+            
+            if [ -z "$status_response" ]; then
+                # Try with auth
+                status_response=$(curl -s --max-time 5 -u "$ADMIN_USER:$ADMIN_PASS" "http://127.0.0.1:7400/api/status" 2>/dev/null)
+            fi
             
             if [ -n "$status_response" ]; then
-                # Count running proxies
-                PROXIES_RUNNING=$(echo "$status_response" | grep -c '"status":"running"' || echo "0")
+                # Count running proxies (flexible pattern with/without spaces)
+                PROXIES_RUNNING=$(echo "$status_response" | grep -oE '"status"\s*:\s*"running"' | wc -l)
                 
                 if [ "$PROXIES_RUNNING" -ge 3 ]; then
                     log "frpc service is running! $PROXIES_RUNNING proxies registered."
                     return 0
+                elif [ "$PROXIES_RUNNING" -ge 1 ]; then
+                    # At least 1 proxy running, might still be connecting
+                    log "Proxies connecting... ($PROXIES_RUNNING/3 running)"
                 fi
             fi
         fi
@@ -177,7 +184,7 @@ verify_service() {
     
     # If we get here, service is not fully operational
     # Get error from journal
-    ERROR_MESSAGE=$(journalctl -u frpc -n 10 --no-pager 2>/dev/null | grep -i "error\|failed\|token" | tail -3 | tr '\n' ' ')
+    ERROR_MESSAGE=$(journalctl -u frpc -n 10 --no-pager 2>/dev/null | grep -iE "error|failed|token|port" | tail -3 | tr '\n' ' ')
     
     if [ -z "$ERROR_MESSAGE" ]; then
         ERROR_MESSAGE="Service not responding after $max_attempts attempts"
