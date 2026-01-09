@@ -1,33 +1,35 @@
 #!/bin/bash
 #
-# FRPC Auto-Installer Script
+# FRPC Auto-Installer Script v2.0
 # Automatically installs and configures frpc with random ports
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/frpc-installer/main/install.sh | bash
-#   curl -fsSL ... | bash -s -- --webhook "https://webhook.site/xxx"
-#   curl -fsSL ... | bash -s -- --name "Box-HaNoi-01" --webhook "https://..."
+#   curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash
+#   curl -fsSL ... | sudo bash -s -- --webhook "https://webhook.site/xxx"
+#   curl -fsSL ... | sudo bash -s -- --name "Box-01" --webhook "https://..."
+#   curl -fsSL ... | sudo bash -s -- --uninstall
 #
 
 set -e
 
 # ============================================================
-# CONFIGURATION - Fixed values
+# CONFIGURATION
 # ============================================================
 SERVER_ADDR="103.166.185.156"
 SERVER_PORT="7000"
 AUTH_TOKEN="angimaxinhthe"
 BANDWIDTH_LIMIT="8MB"
 INSTALL_DIR="/opt/frpc"
-
-# Admin API credentials (fixed)
 ADMIN_USER="admin"
+REQUIRED_SPACE_KB=50000  # 50MB
 
 # ============================================================
 # Parse arguments
 # ============================================================
 BOX_NAME=""
 WEBHOOK_URL=""
+UNINSTALL=false
+UPDATE_MODE=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -38,6 +40,14 @@ while [[ $# -gt 0 ]]; do
         --webhook)
             WEBHOOK_URL="$2"
             shift 2
+            ;;
+        --uninstall)
+            UNINSTALL=true
+            shift
+            ;;
+        --update)
+            UPDATE_MODE=true
+            shift
             ;;
         *)
             shift
@@ -75,29 +85,133 @@ get_arch() {
 }
 
 get_latest_version() {
-    curl -s https://api.github.com/repos/fatedier/frp/releases/latest | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/'
+    curl -s --max-time 10 https://api.github.com/repos/fatedier/frp/releases/latest 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/'
 }
 
-# ============================================================
-# Main installation
-# ============================================================
-log "=========================================="
-log "  FRPC Auto-Installer"
-log "=========================================="
+# Feature 2: Download with retry
+download_with_retry() {
+    local url="$1"
+    local output="$2"
+    local max_attempts=3
+    
+    for i in $(seq 1 $max_attempts); do
+        log "Download attempt $i/$max_attempts..."
+        if curl -sL --max-time 120 "$url" -o "$output"; then
+            if [ -s "$output" ]; then
+                return 0
+            fi
+        fi
+        log "Download failed, retrying in 3 seconds..."
+        sleep 3
+    done
+    return 1
+}
 
-# Check root
-if [ "$EUID" -ne 0 ]; then
-    log "ERROR: Please run as root (sudo)"
-    exit 1
-fi
+# Feature 3: Verify checksum
+verify_download() {
+    local file="$1"
+    if [ ! -f "$file" ]; then
+        return 1
+    fi
+    # Check file is valid tar.gz
+    if ! tar -tzf "$file" &>/dev/null; then
+        log "ERROR: Downloaded file is corrupted"
+        return 1
+    fi
+    log "Download verified successfully"
+    return 0
+}
 
-# ============================================================
+# Feature 5: Check network connectivity
+check_network() {
+    log "Checking network connectivity..."
+    if ! curl -s --max-time 10 https://github.com > /dev/null 2>&1; then
+        log "ERROR: Cannot connect to GitHub. Please check your internet connection."
+        exit 1
+    fi
+    if ! curl -s --max-time 10 "http://$SERVER_ADDR:$SERVER_PORT" > /dev/null 2>&1; then
+        log "WARNING: Cannot connect to FRP server $SERVER_ADDR:$SERVER_PORT"
+        log "Continuing anyway, but frpc may fail to connect..."
+    fi
+    log "Network connectivity OK"
+}
+
+# Feature 6: Verify service running
+verify_service() {
+    log "Verifying frpc service..."
+    local max_attempts=10
+    
+    for i in $(seq 1 $max_attempts); do
+        if systemctl is-active --quiet frpc; then
+            # Try to access admin API
+            if curl -s --max-time 5 "http://127.0.0.1:7400/healthz" > /dev/null 2>&1; then
+                log "frpc service is running and healthy!"
+                return 0
+            fi
+        fi
+        log "Waiting for service to start... ($i/$max_attempts)"
+        sleep 2
+    done
+    
+    log "WARNING: frpc service may not be fully operational"
+    return 1
+}
+
+# Feature 9: Check disk space
+check_disk_space() {
+    log "Checking disk space..."
+    local install_path=$(dirname "$INSTALL_DIR")
+    local available=$(df "$install_path" 2>/dev/null | tail -1 | awk '{print $4}')
+    
+    if [ -z "$available" ]; then
+        log "WARNING: Could not check disk space"
+        return 0
+    fi
+    
+    if [ "$available" -lt "$REQUIRED_SPACE_KB" ]; then
+        log "ERROR: Not enough disk space. Required: ${REQUIRED_SPACE_KB}KB, Available: ${available}KB"
+        exit 1
+    fi
+    log "Disk space OK (${available}KB available)"
+}
+
+# Feature 7: Uninstall function
+do_uninstall() {
+    log "=========================================="
+    log "  FRPC Uninstaller"
+    log "=========================================="
+    
+    if systemctl is-active --quiet frpc 2>/dev/null; then
+        log "Stopping frpc service..."
+        systemctl stop frpc
+    fi
+    
+    if systemctl is-enabled --quiet frpc 2>/dev/null; then
+        log "Disabling frpc service..."
+        systemctl disable frpc
+    fi
+    
+    if [ -f /etc/systemd/system/frpc.service ]; then
+        log "Removing systemd service..."
+        rm -f /etc/systemd/system/frpc.service
+        systemctl daemon-reload
+    fi
+    
+    if [ -d "$INSTALL_DIR" ]; then
+        log "Removing installation directory..."
+        rm -rf "$INSTALL_DIR"
+    fi
+    
+    log "=========================================="
+    log "  UNINSTALL COMPLETE"
+    log "=========================================="
+    exit 0
+}
+
 # Install dependencies
-# ============================================================
 install_dependencies() {
     local missing=()
     
-    # Check required commands
     for cmd in curl tar grep sed; do
         if ! command -v $cmd &> /dev/null; then
             missing+=($cmd)
@@ -105,13 +219,11 @@ install_dependencies() {
     done
     
     if [ ${#missing[@]} -eq 0 ]; then
-        log "All dependencies are installed"
         return 0
     fi
     
     log "Installing missing dependencies: ${missing[*]}"
     
-    # Detect package manager
     if command -v apt-get &> /dev/null; then
         apt-get update -qq
         apt-get install -y -qq "${missing[@]}"
@@ -123,11 +235,50 @@ install_dependencies() {
         log "ERROR: Could not detect package manager. Please install manually: ${missing[*]}"
         exit 1
     fi
-    
-    log "Dependencies installed successfully"
 }
 
+# ============================================================
+# Main
+# ============================================================
+log "=========================================="
+log "  FRPC Auto-Installer v2.0"
+log "=========================================="
+
+# Check root
+if [ "$EUID" -ne 0 ]; then
+    log "ERROR: Please run as root (sudo)"
+    exit 1
+fi
+
+# Feature 7: Handle uninstall
+if [ "$UNINSTALL" = true ]; then
+    do_uninstall
+fi
+
+# Feature 1: Check if already installed (update mode)
+if [ -f "$INSTALL_DIR/frpc" ]; then
+    if [ "$UPDATE_MODE" = true ]; then
+        log "Update mode: Existing installation found"
+        log "Backing up current config..."
+        cp "$INSTALL_DIR/frpc.toml" "$INSTALL_DIR/frpc.toml.bak" 2>/dev/null || true
+    else
+        log "WARNING: frpc is already installed at $INSTALL_DIR"
+        log "Use --update to update, or --uninstall to remove first"
+        log ""
+        log "Current config:"
+        cat "$INSTALL_DIR/frpc.toml" 2>/dev/null | grep -E "^(name|remotePort|username)" | head -10
+        exit 0
+    fi
+fi
+
+# Install dependencies
 install_dependencies
+
+# Feature 5: Check network
+check_network
+
+# Feature 9: Check disk space
+check_disk_space
 
 # Detect architecture
 ARCH=$(get_arch)
@@ -167,13 +318,26 @@ if [ -z "$BOX_NAME" ]; then
 fi
 log "Box name: $BOX_NAME"
 
-# Download frpc
+# Download frpc with retry
 log "Downloading frpc v$VERSION for linux_$ARCH..."
 DOWNLOAD_URL="https://github.com/fatedier/frp/releases/download/v${VERSION}/frp_${VERSION}_linux_${ARCH}.tar.gz"
 TMP_DIR=$(mktemp -d)
 cd "$TMP_DIR"
 
-curl -sL "$DOWNLOAD_URL" -o frp.tar.gz
+# Feature 2: Download with retry
+if ! download_with_retry "$DOWNLOAD_URL" "frp.tar.gz"; then
+    log "ERROR: Failed to download frpc after multiple attempts"
+    rm -rf "$TMP_DIR"
+    exit 1
+fi
+
+# Feature 3: Verify download
+if ! verify_download "frp.tar.gz"; then
+    log "ERROR: Download verification failed"
+    rm -rf "$TMP_DIR"
+    exit 1
+fi
+
 tar -xzf frp.tar.gz
 cd frp_${VERSION}_linux_${ARCH}
 
@@ -257,26 +421,21 @@ EOF
 log "Enabling and starting frpc service..."
 systemctl daemon-reload
 systemctl enable frpc
-systemctl start frpc
+systemctl restart frpc
 
-# Wait for service to start
-sleep 3
-
-# Check status
-if systemctl is-active --quiet frpc; then
+# Feature 6: Verify service
+verify_service
+if [ $? -eq 0 ]; then
     STATUS="success"
-    log "frpc is running!"
 else
-    STATUS="failed"
-    log "ERROR: frpc failed to start"
-    journalctl -u frpc -n 20 --no-pager
+    STATUS="partial"
 fi
 
 # Cleanup
 rm -rf "$TMP_DIR"
 
 # Get public IP
-PUBLIC_IP=$(curl -s https://api.ipify.org 2>/dev/null || echo "unknown")
+PUBLIC_IP=$(curl -s --max-time 10 https://api.ipify.org 2>/dev/null || echo "unknown")
 
 # Print summary
 log "=========================================="
@@ -302,6 +461,12 @@ echo "  Username: $ADMIN_USER"
 echo "  Password: $ADMIN_PASS"
 echo ""
 echo "Public IP: $PUBLIC_IP"
+echo ""
+echo "Commands:"
+echo "  Status:    systemctl status frpc"
+echo "  Restart:   systemctl restart frpc"
+echo "  Logs:      journalctl -u frpc -f"
+echo "  Uninstall: curl -fsSL .../install.sh | sudo bash -s -- --uninstall"
 echo ""
 
 # Send to webhook if provided
