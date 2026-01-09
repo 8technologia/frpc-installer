@@ -1,6 +1,6 @@
-# FRPC Auto-Installer
+# FRPC Auto-Installer v2.1
 
-Script tự động cài đặt frpc với cấu hình ngẫu nhiên.
+Script tự động cài đặt và cấu hình frpc với random ports.
 
 ## Tính năng
 
@@ -8,41 +8,48 @@ Script tự động cài đặt frpc với cấu hình ngẫu nhiên.
 - ✅ Tải phiên bản frpc mới nhất từ GitHub
 - ✅ Random port: SOCKS5 (51xxx), HTTP (52xxx), Admin (53xxx)
 - ✅ Random username/password
-- ✅ Tự động cấu hình systemd (auto-start khi boot)
-- ✅ Gửi thông tin về webhook (tùy chọn)
-- ✅ Retry download 3 lần nếu thất bại
+- ✅ Systemd auto-start khi boot
+- ✅ Webhook với retry (5 lần, exponential backoff)
+- ✅ Retry download 3 lần
 - ✅ Kiểm tra network, disk space
-- ✅ Hỗ trợ update và uninstall
+- ✅ Update mode (chỉ cập nhật binary, giữ config)
+- ✅ Uninstall mode
 
 ## Cài đặt
 
-### Cài mới
+### Cài mới (bắt buộc `--server`)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- \
+  --server "103.166.185.156:7000:your_token"
 ```
 
 ### Với tên box
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --name "Box-HaNoi-01"
+curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- \
+  --server "103.166.185.156:7000:your_token" \
+  --name "Box-HaNoi-01"
 ```
 
 ### Với webhook
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --webhook "https://webhook.site/your-id"
+curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- \
+  --server "103.166.185.156:7000:your_token" \
+  --webhook "https://webhook.site/your-id"
 ```
 
 ### Đầy đủ tham số
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- \
+  --server "103.166.185.156:7000:your_token" \
   --name "Box-HaNoi-01" \
   --webhook "https://webhook.site/your-id"
 ```
 
-### Cập nhật
+### Cập nhật (giữ config)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --update
@@ -54,11 +61,20 @@ curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/
 curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --uninstall
 ```
 
-## Kết quả sau cài đặt
+## Tham số
+
+| Tham số | Bắt buộc | Mô tả |
+|---------|----------|-------|
+| `--server "IP:PORT:TOKEN"` | ✅ (cài mới) | Server FRP format: IP:PORT:TOKEN |
+| `--name "Box Name"` | ❌ | Tên box (mặc định: Box-hostname-xxx) |
+| `--webhook "URL"` | ❌ | URL nhận thông báo sau cài đặt |
+| `--update` | ❌ | Chỉ cập nhật binary, giữ config |
+| `--uninstall` | ❌ | Gỡ cài đặt hoàn toàn |
+
+## Kết quả cài đặt
 
 ```
 Box Name: Box-HaNoi-01
-Server: 103.166.185.156:7000
 
 SOCKS5 Proxy:
   Address: 103.166.185.156:51234
@@ -76,6 +92,25 @@ Admin API:
   Password: x9m3k7p2a5b8c1d4
 ```
 
+## Webhook Data
+
+```json
+{
+  "timestamp": "2026-01-09T15:00:00+07:00",
+  "hostname": "armbian",
+  "box_name": "Box-HaNoi-01",
+  "architecture": "arm64",
+  "frpc_version": "0.66.0",
+  "public_ip": "123.45.67.89",
+  "proxies": {
+    "socks5": { "port": 51234, "username": "...", "password": "..." },
+    "http": { "port": 52234, "username": "...", "password": "..." },
+    "admin_api": { "port": 53234, "username": "admin", "password": "..." }
+  },
+  "status": "success"
+}
+```
+
 ## Quản lý service
 
 ```bash
@@ -84,11 +119,10 @@ systemctl restart frpc     # Restart
 journalctl -u frpc -f      # Xem logs
 ```
 
-## Yêu cầu trên FRP Server
-
-Đảm bảo `frps.toml` đã mở port:
+## Yêu cầu FRP Server
 
 ```toml
+# frps.toml
 allowPorts = [
   { start = 51001, end = 51999 },
   { start = 52001, end = 52999 },
