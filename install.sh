@@ -1,13 +1,13 @@
 #!/bin/bash
 #
-# FRPC Auto-Installer Script v2.0
+# FRPC Auto-Installer Script v2.1
 # Automatically installs and configures frpc with random ports
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash
-#   curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --webhook "https://webhook.site/xxx"
-#   curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --name "Box-01" --webhook "https://..."
-#   curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --uninstall
+#   curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --server "IP:PORT:TOKEN"
+#   curl -fsSL ... | sudo bash -s -- --server "103.166.185.156:7000:mytoken" --name "Box-01"
+#   curl -fsSL ... | sudo bash -s -- --server "103.166.185.156:7000:mytoken" --webhook "https://webhook.site/xxx"
+#   curl -fsSL ... | sudo bash -s -- --uninstall
 #
 
 set -e
@@ -15,9 +15,9 @@ set -e
 # ============================================================
 # CONFIGURATION
 # ============================================================
-SERVER_ADDR="103.166.185.156"
+SERVER_ADDR=""
 SERVER_PORT="7000"
-AUTH_TOKEN="angimaxinhthe"
+AUTH_TOKEN=""
 BANDWIDTH_LIMIT="8MB"
 INSTALL_DIR="/opt/frpc"
 ADMIN_USER="admin"
@@ -33,6 +33,11 @@ UPDATE_MODE=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --server)
+            # Format: IP:PORT:TOKEN
+            IFS=':' read -r SERVER_ADDR SERVER_PORT AUTH_TOKEN <<< "$2"
+            shift 2
+            ;;
         --name)
             BOX_NAME="$2"
             shift 2
@@ -241,7 +246,7 @@ install_dependencies() {
 # Main
 # ============================================================
 log "=========================================="
-log "  FRPC Auto-Installer v2.0"
+log "  FRPC Auto-Installer v2.1"
 log "=========================================="
 
 # Check root
@@ -250,10 +255,21 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Feature 7: Handle uninstall
+# Feature 7: Handle uninstall (doesn't need --server)
 if [ "$UNINSTALL" = true ]; then
     do_uninstall
 fi
+
+# Validate required --server parameter
+if [ -z "$SERVER_ADDR" ] || [ -z "$AUTH_TOKEN" ]; then
+    log "ERROR: --server parameter is required"
+    log ""
+    log "Usage: curl -fsSL .../install.sh | sudo bash -s -- --server \"IP:PORT:TOKEN\""
+    log "Example: --server \"103.166.185.156:7000:mytoken\""
+    exit 1
+fi
+
+log "Server: $SERVER_ADDR:$SERVER_PORT"
 
 # Feature 1: Check if already installed (update mode)
 if [ -f "$INSTALL_DIR/frpc" ]; then
@@ -469,7 +485,7 @@ echo "  Logs:      journalctl -u frpc -f"
 echo "  Uninstall: curl -fsSL .../install.sh | sudo bash -s -- --uninstall"
 echo ""
 
-# Send to webhook if provided
+# Send to webhook if provided (with retry and exponential backoff)
 if [ -n "$WEBHOOK_URL" ]; then
     log "Sending data to webhook..."
     
@@ -509,14 +525,31 @@ if [ -n "$WEBHOOK_URL" ]; then
 EOF
 )
     
-    curl -s -X POST "$WEBHOOK_URL" \
-        -H "Content-Type: application/json" \
-        -d "$JSON_DATA" > /dev/null 2>&1
+    # Retry with exponential backoff (5 attempts: 2s, 4s, 8s, 16s, 32s)
+    MAX_WEBHOOK_RETRIES=5
+    WEBHOOK_DELAY=2
+    WEBHOOK_SUCCESS=false
     
-    if [ $? -eq 0 ]; then
-        log "Webhook sent successfully!"
-    else
-        log "Warning: Failed to send webhook"
+    for i in $(seq 1 $MAX_WEBHOOK_RETRIES); do
+        log "Webhook attempt $i/$MAX_WEBHOOK_RETRIES..."
+        
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "$JSON_DATA" --max-time 30 2>/dev/null || echo "000")
+        
+        if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            log "Webhook sent successfully! (HTTP $HTTP_CODE)"
+            WEBHOOK_SUCCESS=true
+            break
+        else
+            log "Webhook failed (HTTP $HTTP_CODE), retrying in ${WEBHOOK_DELAY}s..."
+            sleep $WEBHOOK_DELAY
+            WEBHOOK_DELAY=$((WEBHOOK_DELAY * 2))  # Exponential backoff
+        fi
+    done
+    
+    if [ "$WEBHOOK_SUCCESS" = false ]; then
+        log "WARNING: Failed to send webhook after $MAX_WEBHOOK_RETRIES attempts"
     fi
 fi
 
