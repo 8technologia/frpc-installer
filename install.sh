@@ -143,24 +143,85 @@ check_network() {
     log "Network connectivity OK"
 }
 
-# Feature 6: Verify service running
+# Feature 6: Verify service running with detailed status
 verify_service() {
     log "Verifying frpc service..."
-    local max_attempts=10
+    local max_attempts=15
+    local retry_count=0
+    
+    ERROR_MESSAGE=""
+    PROXIES_RUNNING=0
+    FRPC_RUNNING=false
     
     for i in $(seq 1 $max_attempts); do
         if systemctl is-active --quiet frpc; then
-            # Try to access admin API
-            if curl -s --max-time 5 "http://127.0.0.1:7400/healthz" > /dev/null 2>&1; then
-                log "frpc service is running and healthy!"
-                return 0
+            FRPC_RUNNING=true
+            
+            # Check admin API and proxy status
+            local status_response=$(curl -s --max-time 5 -u "$ADMIN_USER:$ADMIN_PASS" "http://127.0.0.1:7400/api/status" 2>/dev/null)
+            
+            if [ -n "$status_response" ]; then
+                # Count running proxies
+                PROXIES_RUNNING=$(echo "$status_response" | grep -c '"status":"running"' || echo "0")
+                
+                if [ "$PROXIES_RUNNING" -ge 3 ]; then
+                    log "frpc service is running! $PROXIES_RUNNING proxies registered."
+                    return 0
+                fi
             fi
         fi
-        log "Waiting for service to start... ($i/$max_attempts)"
+        
+        log "Waiting for service to stabilize... ($i/$max_attempts)"
         sleep 2
     done
     
+    # If we get here, service is not fully operational
+    # Get error from journal
+    ERROR_MESSAGE=$(journalctl -u frpc -n 10 --no-pager 2>/dev/null | grep -i "error\|failed\|token" | tail -3 | tr '\n' ' ')
+    
+    if [ -z "$ERROR_MESSAGE" ]; then
+        ERROR_MESSAGE="Service not responding after $max_attempts attempts"
+    fi
+    
     log "WARNING: frpc service may not be fully operational"
+    log "Error: $ERROR_MESSAGE"
+    return 1
+}
+
+# Retry frpc service with troubleshooting
+retry_frpc_service() {
+    local max_retries=3
+    log "Attempting to recover frpc service..."
+    
+    for i in $(seq 1 $max_retries); do
+        log "Retry attempt $i/$max_retries..."
+        
+        # Restart service
+        systemctl restart frpc
+        sleep 5
+        
+        # Verify
+        if verify_service; then
+            log "Recovery successful on attempt $i!"
+            return 0
+        fi
+        
+        # If token error, can't retry
+        if echo "$ERROR_MESSAGE" | grep -qi "token"; then
+            log "ERROR: Token mismatch detected. Please check auth.token in config."
+            return 1
+        fi
+        
+        # If port error, can't retry
+        if echo "$ERROR_MESSAGE" | grep -qi "port not allowed\|port already"; then
+            log "ERROR: Port issue detected. Check frps allowPorts configuration."
+            return 1
+        fi
+        
+        sleep 3
+    done
+    
+    log "ERROR: Failed to recover frpc service after $max_retries attempts"
     return 1
 }
 
@@ -463,15 +524,23 @@ systemctl daemon-reload
 systemctl enable frpc
 systemctl restart frpc
 
-# Feature 6: Verify service
-verify_service
-if [ $? -eq 0 ]; then
+# Wait a moment for initial connection
+sleep 3
+
+# Feature 6: Verify service with detailed status
+if verify_service; then
     STATUS="success"
 else
-    STATUS="partial"
+    # Try recovery
+    log "Initial verification failed. Attempting recovery..."
+    if retry_frpc_service; then
+        STATUS="recovered"
+    else
+        STATUS="failed"
+    fi
 fi
 
-# Cleanup
+# Cleanup temp files
 rm -rf "$TMP_DIR"
 
 # Get public IP
@@ -479,41 +548,93 @@ PUBLIC_IP=$(curl -s --max-time 10 https://api.ipify.org 2>/dev/null || echo "unk
 
 # Print summary
 log "=========================================="
-log "  INSTALLATION COMPLETE"
+if [ "$STATUS" = "success" ] || [ "$STATUS" = "recovered" ]; then
+    log "  INSTALLATION COMPLETE"
+else
+    log "  INSTALLATION COMPLETE (WITH ERRORS)"
+fi
 log "=========================================="
 echo ""
 echo "Box Name: $BOX_NAME"
 echo "Server: $SERVER_ADDR:$SERVER_PORT"
+echo "Status: $STATUS"
+echo "Proxies Running: $PROXIES_RUNNING"
 echo ""
-echo "SOCKS5 Proxy:"
-echo "  Address: $SERVER_ADDR:$SOCKS5_PORT"
-echo "  Username: $PROXY_USER"
-echo "  Password: $PROXY_PASS"
-echo ""
-echo "HTTP Proxy:"
-echo "  Address: $SERVER_ADDR:$HTTP_PORT"
-echo "  Username: $PROXY_USER"
-echo "  Password: $PROXY_PASS"
-echo ""
-echo "Admin API:"
-echo "  Address: $SERVER_ADDR:$ADMIN_PORT"
-echo "  Username: $ADMIN_USER"
-echo "  Password: $ADMIN_PASS"
-echo ""
+
+if [ "$SKIP_CONFIG_GENERATION" = false ]; then
+    echo "SOCKS5 Proxy:"
+    echo "  Address: $SERVER_ADDR:$SOCKS5_PORT"
+    echo "  Username: $PROXY_USER"
+    echo "  Password: $PROXY_PASS"
+    echo ""
+    echo "HTTP Proxy:"
+    echo "  Address: $SERVER_ADDR:$HTTP_PORT"
+    echo "  Username: $PROXY_USER"
+    echo "  Password: $PROXY_PASS"
+    echo ""
+    echo "Admin API:"
+    echo "  Address: $SERVER_ADDR:$ADMIN_PORT"
+    echo "  Username: $ADMIN_USER"
+    echo "  Password: $ADMIN_PASS"
+    echo ""
+fi
+
 echo "Public IP: $PUBLIC_IP"
 echo ""
 echo "Commands:"
 echo "  Status:    systemctl status frpc"
 echo "  Restart:   systemctl restart frpc"
 echo "  Logs:      journalctl -u frpc -f"
+echo "  Config:    cat $INSTALL_DIR/frpc.toml"
 echo "  Uninstall: curl -fsSL .../install.sh | sudo bash -s -- --uninstall"
 echo ""
+
+# Show troubleshooting if failed
+if [ "$STATUS" = "failed" ]; then
+    echo "=========================================="
+    echo "  TROUBLESHOOTING"
+    echo "=========================================="
+    echo ""
+    echo "Error: $ERROR_MESSAGE"
+    echo ""
+    echo "Common fixes:"
+    echo "1. Token mismatch:"
+    echo "   - Check auth.token in $INSTALL_DIR/frpc.toml"
+    echo "   - Ensure it matches token in frps.toml on server"
+    echo ""
+    echo "2. Port not allowed:"
+    echo "   - Add ports to frps.toml: allowPorts = [{start=51001,end=53999}]"
+    echo "   - Run: systemctl restart frps"
+    echo ""
+    echo "3. Network issue:"
+    echo "   - Check: curl http://$SERVER_ADDR:$SERVER_PORT"
+    echo "   - Ensure firewall allows connection"
+    echo ""
+    echo "After fixing, restart: systemctl restart frpc"
+    echo ""
+fi
 
 # Send to webhook if provided (with retry and exponential backoff)
 if [ -n "$WEBHOOK_URL" ]; then
     log "Sending data to webhook..."
     
+    # Escape error message for JSON
+    ESCAPED_ERROR=$(echo "$ERROR_MESSAGE" | sed 's/"/\\"/g' | tr '\n' ' ')
+    
     TIMESTAMP=$(date -Iseconds)
+    
+    # Build JSON with proper handling of update mode
+    if [ "$SKIP_CONFIG_GENERATION" = true ]; then
+        # Update mode - read existing values from config
+        SOCKS5_PORT=$(grep -oP 'remotePort = \K[0-9]+' "$INSTALL_DIR/frpc.toml" | head -1)
+        HTTP_PORT=$(grep -oP 'remotePort = \K[0-9]+' "$INSTALL_DIR/frpc.toml" | head -2 | tail -1)
+        ADMIN_PORT=$(grep -oP 'remotePort = \K[0-9]+' "$INSTALL_DIR/frpc.toml" | tail -1)
+        PROXY_USER="(existing)"
+        PROXY_PASS="(existing)"
+        ADMIN_PASS="(existing)"
+        BOX_NAME=$(grep -oP 'name = "\K[^"]+' "$INSTALL_DIR/frpc.toml" | head -1 | sed 's/ - SOCKS5//')
+    fi
+    
     JSON_DATA=$(cat << EOF
 {
   "timestamp": "$TIMESTAMP",
@@ -525,26 +646,29 @@ if [ -n "$WEBHOOK_URL" ]; then
   "public_ip": "$PUBLIC_IP",
   "proxies": {
     "socks5": {
-      "port": $SOCKS5_PORT,
-      "address": "$SERVER_ADDR:$SOCKS5_PORT",
+      "port": ${SOCKS5_PORT:-0},
+      "address": "$SERVER_ADDR:${SOCKS5_PORT:-0}",
       "username": "$PROXY_USER",
       "password": "$PROXY_PASS"
     },
     "http": {
-      "port": $HTTP_PORT,
-      "address": "$SERVER_ADDR:$HTTP_PORT",
+      "port": ${HTTP_PORT:-0},
+      "address": "$SERVER_ADDR:${HTTP_PORT:-0}",
       "username": "$PROXY_USER",
       "password": "$PROXY_PASS"
     },
     "admin_api": {
-      "port": $ADMIN_PORT,
-      "address": "$SERVER_ADDR:$ADMIN_PORT",
+      "port": ${ADMIN_PORT:-0},
+      "address": "$SERVER_ADDR:${ADMIN_PORT:-0}",
       "username": "$ADMIN_USER",
       "password": "$ADMIN_PASS"
     }
   },
   "bandwidth_limit": "$BANDWIDTH_LIMIT",
-  "status": "$STATUS"
+  "status": "$STATUS",
+  "frpc_running": $FRPC_RUNNING,
+  "proxies_registered": $PROXIES_RUNNING,
+  "error": "$ESCAPED_ERROR"
 }
 EOF
 )
@@ -578,3 +702,4 @@ EOF
 fi
 
 log "Done!"
+
