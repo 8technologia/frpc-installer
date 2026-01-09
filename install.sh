@@ -942,10 +942,56 @@ if [ -n "$WEBHOOK_URL" ]; then
   "status": "$STATUS",
   "frpc_running": $FRPC_RUNNING,
   "proxies_registered": $PROXIES_RUNNING,
-  "error": "$ESCAPED_ERROR"
+  "error": "$ESCAPED_ERROR",
+  "frpc_logs": "$FRPC_LOGS"
 }
 EOF
 )
+    
+    # Get frpc logs if failed (for debugging)
+    if [ "$STATUS" = "failed" ]; then
+        FRPC_LOGS=$(journalctl -u frpc -n 20 --no-pager 2>/dev/null | sed 's/"/\\"/g' | tr '\n' '|')
+        # Re-build JSON with logs
+        JSON_DATA=$(cat << EOF
+{
+  "event": "$WEBHOOK_EVENT",
+  "timestamp": "$TIMESTAMP",
+  "hostname": "$(hostname)",
+  "box_name": "$BOX_NAME",
+  "architecture": "$ARCH",
+  "frpc_version": "$VERSION",
+  "server": "$SERVER_ADDR:$SERVER_PORT",
+  "public_ip": "$PUBLIC_IP",
+  "proxies": {
+    "socks5": {
+      "port": ${SOCKS5_PORT:-0},
+      "address": "$SERVER_ADDR:${SOCKS5_PORT:-0}",
+      "username": "$PROXY_USER",
+      "password": "$PROXY_PASS"
+    },
+    "http": {
+      "port": ${HTTP_PORT:-0},
+      "address": "$SERVER_ADDR:${HTTP_PORT:-0}",
+      "username": "$PROXY_USER",
+      "password": "$PROXY_PASS"
+    },
+    "admin_api": {
+      "port": ${ADMIN_PORT:-0},
+      "address": "$SERVER_ADDR:${ADMIN_PORT:-0}",
+      "username": "$ADMIN_USER",
+      "password": "$ADMIN_PASS"
+    }
+  },
+  "bandwidth_limit": "$BANDWIDTH_LIMIT",
+  "status": "$STATUS",
+  "frpc_running": $FRPC_RUNNING,
+  "proxies_registered": $PROXIES_RUNNING,
+  "error": "$ESCAPED_ERROR",
+  "frpc_logs": "$FRPC_LOGS"
+}
+EOF
+)
+    fi
     
     # Retry with exponential backoff (5 attempts: 20s, 40s, 80s, 160s = ~5 minutes total)
     MAX_WEBHOOK_RETRIES=5
