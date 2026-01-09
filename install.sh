@@ -35,7 +35,9 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --server)
             # Format: IP:PORT:TOKEN
-            IFS=':' read -r SERVER_ADDR SERVER_PORT AUTH_TOKEN <<< "$2"
+            SERVER_ADDR=$(echo "$2" | cut -d':' -f1)
+            SERVER_PORT=$(echo "$2" | cut -d':' -f2)
+            AUTH_TOKEN=$(echo "$2" | cut -d':' -f3-)
             shift 2
             ;;
         --name)
