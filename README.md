@@ -165,12 +165,31 @@ cat /opt/frpc/frpc.toml    # Xem config
 
 ```toml
 # frps.toml
+bindPort = 7000
+
+# Authentication (BẮT BUỘC - phải khớp với token trong --server)
+auth.method = "token"
+auth.token = "your_secret_token"
+
+# Cho phép port range cho boxes
 allowPorts = [
   { start = 51001, end = 51999 },
   { start = 52001, end = 52999 },
   { start = 53001, end = 53999 }
 ]
+
+# Optional: Web Dashboard
+webServer.addr = "0.0.0.0"
+webServer.port = 7500
+webServer.user = "admin"
+webServer.password = "admin123"
 ```
+
+**Lưu ý:**
+
+- `auth.token` trong frps.toml **PHẢI KHỚP** với token trong `--server "IP:PORT:TOKEN"`
+- Nếu không khớp → frpc báo lỗi "token mismatch"
+- Nếu port ngoài `allowPorts` → frpc báo lỗi "port not allowed"
 
 ## Cấu trúc thư mục
 
