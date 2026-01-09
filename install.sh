@@ -572,11 +572,27 @@ send_webhook() {
 EOF
 )
     
-    curl -s -X POST "$webhook_url" \
-        -H "Content-Type: application/json" \
-        -d "$json_data" --max-time 10 > /dev/null 2>&1
+    # Retry webhook (3 attempts: 5s, 10s delays = ~30s max)
+    local max_retries=3
+    local delay=5
     
-    log "Webhook sent: $event - $message"
+    for i in $(seq 1 $max_retries); do
+        local http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$webhook_url" \
+            -H "Content-Type: application/json" \
+            -d "$json_data" --max-time 10 2>/dev/null || echo "000")
+        
+        if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 300 ]; then
+            log "Webhook sent: $event - $message (HTTP $http_code)"
+            return 0
+        fi
+        
+        if [ "$i" -lt "$max_retries" ]; then
+            sleep $delay
+            delay=$((delay * 2))
+        fi
+    done
+    
+    log "WARNING: Failed to send webhook after $max_retries attempts"
 }
 
 # Get restart count in last hour
@@ -855,9 +871,9 @@ if [ -n "$WEBHOOK_URL" ]; then
 EOF
 )
     
-    # Retry with exponential backoff (5 attempts: 2s, 4s, 8s, 16s, 32s)
+    # Retry with exponential backoff (5 attempts: 20s, 40s, 80s, 160s = ~5 minutes total)
     MAX_WEBHOOK_RETRIES=5
-    WEBHOOK_DELAY=2
+    WEBHOOK_DELAY=20
     WEBHOOK_SUCCESS=false
     
     for i in $(seq 1 $MAX_WEBHOOK_RETRIES); do
@@ -872,9 +888,11 @@ EOF
             WEBHOOK_SUCCESS=true
             break
         else
-            log "Webhook failed (HTTP $HTTP_CODE), retrying in ${WEBHOOK_DELAY}s..."
-            sleep $WEBHOOK_DELAY
-            WEBHOOK_DELAY=$((WEBHOOK_DELAY * 2))  # Exponential backoff
+            if [ "$i" -lt "$MAX_WEBHOOK_RETRIES" ]; then
+                log "Webhook failed (HTTP $HTTP_CODE), retrying in ${WEBHOOK_DELAY}s..."
+                sleep $WEBHOOK_DELAY
+                WEBHOOK_DELAY=$((WEBHOOK_DELAY * 2))  # Exponential backoff
+            fi
         fi
     done
     
