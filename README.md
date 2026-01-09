@@ -1,22 +1,22 @@
-# FRPC Auto-Installer v2.5
+# FRPC Auto-Installer v3.2
 
-Script tự động cài đặt và cấu hình frpc với random ports, health check tự động, và webhook notifications.
+Script tự động cài đặt và cấu hình frpc client với đầy đủ tính năng production-ready.
 
-## Tính năng
+## ✅ Tính năng
 
-- ✅ Tự động phát hiện kiến trúc CPU (amd64, arm64, arm)
-- ✅ Tải phiên bản frpc mới nhất từ GitHub
-- ✅ Random port: SOCKS5 (51xxx), HTTP (52xxx), Admin (53xxx)
-- ✅ Random username/password
-- ✅ Systemd auto-start khi boot
-- ✅ Health check mỗi 2 phút với auto-restart
-- ✅ Rate limiting: tối đa 5 restarts/giờ
-- ✅ Webhook thông báo: cài đặt, down, up, rate limit
-- ✅ Retry download 3 lần
-- ✅ Kiểm tra network, disk space
-- ✅ Update mode, Uninstall mode
+- **Zero-touch Installation**: Cài đặt hoàn toàn tự động với 1 lệnh
+- **Auto Architecture Detection**: Hỗ trợ amd64, arm64, arm
+- **Random Ports**: SOCKS5 (51xxx), HTTP (52xxx), Admin (53xxx)
+- **Port Retry**: Tự động thử port khác nếu bị trùng (max 3 lần)
+- **Random Credentials**: Username/password ngẫu nhiên mỗi lần cài
+- **Health Check**: Kiểm tra mỗi 2 phút, tự động restart
+- **Rate Limiting**: Tối đa 5 restarts/giờ (tránh restart loop)
+- **Webhook Notifications**: Gửi thông báo khi cài/down/up/rate_limit
+- **Log Rotation**: Tự động rotate log khi >1MB
+- **Update Mode**: Cập nhật binary, giữ nguyên config
+- **Uninstall Mode**: Gỡ sạch sẽ
 
-## Cài đặt
+## 🚀 Cài đặt
 
 ### Cài mới (bắt buộc `--server`)
 
@@ -46,28 +46,30 @@ curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/
 curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --uninstall
 ```
 
-## Tham số
+## 📋 Tham số
 
 | Tham số | Bắt buộc | Mô tả |
 |---------|----------|-------|
-| `--server "IP:PORT:TOKEN"` | ✅ (cài mới) | Server FRP |
+| `--server "IP:PORT:TOKEN"` | ✅ (cài mới) | Server FRP và token xác thực |
 | `--name "Box Name"` | ❌ | Tên box (mặc định: Box-hostname-xxx) |
-| `--webhook "URL"` | ❌ | URL nhận thông báo |
-| `--update` | ❌ | Chỉ cập nhật binary |
-| `--uninstall` | ❌ | Gỡ cài đặt |
+| `--webhook "URL"` | ❌ | URL nhận webhook notifications |
+| `--update` | ❌ | Chỉ cập nhật binary, giữ config |
+| `--uninstall` | ❌ | Gỡ cài đặt hoàn toàn |
 
-## Webhook Events
+## 🔔 Webhook Events
 
-| Event | Mô tả | Có logs |
-|-------|-------|---------|
-| `install_success` | Cài đặt thành công | ❌ |
-| `install_failed` | Cài đặt thất bại | ✅ |
-| `update_complete` | Cập nhật binary xong | ❌ |
-| `frpc_down` | frpc ngừng hoạt động | ✅ |
-| `frpc_up` | frpc khôi phục | ❌ |
-| `frpc_rate_limit` | Đạt giới hạn restart | ✅ |
+| Event | Nguồn | Có logs | Mô tả |
+|-------|-------|---------|-------|
+| `install_success` | Installer | ❌ | Cài đặt thành công |
+| `install_failed` | Installer | ✅ | Cài đặt thất bại |
+| `update_complete` | Installer | ❌ | Cập nhật binary xong |
+| `frpc_down` | Health Check | ✅ | frpc ngừng hoạt động |
+| `frpc_up` | Health Check | ❌ | frpc khôi phục |
+| `frpc_rate_limit` | Health Check | ✅ | Đạt giới hạn 5 restart/giờ |
 
-### 1. Cài đặt thành công
+### Ví dụ webhook payload
+
+**Cài đặt thành công:**
 
 ```json
 {
@@ -77,68 +79,35 @@ curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/
   "frpc_version": "0.66.0",
   "public_ip": "123.45.67.89",
   "proxies": {
-    "socks5": { "port": 51234, "username": "...", "password": "..." },
-    "http": { "port": 52234, "username": "...", "password": "..." },
-    "admin_api": { "port": 53234, "username": "admin", "password": "..." }
+    "socks5": { "port": 51234, "username": "abc", "password": "xyz" },
+    "http": { "port": 52234, "username": "abc", "password": "xyz" },
+    "admin_api": { "port": 53234, "username": "admin", "password": "123" }
   },
   "frpc_running": true,
   "proxies_registered": 3
 }
 ```
 
-### 2. Cài đặt thất bại (có logs)
-
-```json
-{
-  "event": "install_failed",
-  "status": "failed",
-  "error": "token mismatch",
-  "frpc_logs": "Jan 09 17:30:01 sv1 frpc[1234]: login failed|Jan 09 17:30:01 sv1 frpc[1234]: token mismatch|..."
-}
-```
-
-### 3. frpc Down (có logs)
+**frpc Down (có logs để debug):**
 
 ```json
 {
   "event": "frpc_down",
   "message": "frpc is not responding",
   "box_name": "Box-HaNoi-01",
-  "frpc_logs": "Jan 09 17:30:01 sv1 frpc[1234]: connection lost|..."
+  "frpc_logs": "Jan 09 17:30:01 sv1 frpc: connection lost|..."
 }
 ```
 
-### 4. frpc Khôi phục
+## 🏥 Health Check
 
-```json
-{
-  "event": "frpc_up",
-  "message": "frpc restarted successfully",
-  "box_name": "Box-HaNoi-01"
-}
-```
-
-### 5. Rate Limit (có logs)
-
-```json
-{
-  "event": "frpc_rate_limit",
-  "message": "Rate limit reached (5 restarts/hour). Manual intervention required.",
-  "frpc_logs": "..."
-}
-```
-
-## Health Check
-
-Script tự động tạo health check:
-
-| Thành phần | Chi tiết |
-|------------|----------|
+| Cấu hình | Giá trị |
+|----------|---------|
 | Script | `/opt/frpc/healthcheck.sh` |
-| Cron | Chạy mỗi 2 phút |
-| Rate limit | Tối đa 5 restarts/giờ |
+| Cron | Chạy mỗi **2 phút** |
+| Rate limit | Tối đa **5 restarts/giờ** |
 | Log | `/var/log/frpc-healthcheck.log` |
-| Webhook URL | `/opt/frpc/.webhook_url` |
+| Log rotation | **1MB**, giữ **3 backups** |
 
 ### Thêm webhook thủ công (nếu quên khi cài)
 
@@ -152,17 +121,17 @@ echo "https://webhook.site/your-id" > /opt/frpc/.webhook_url
 tail -f /var/log/frpc-healthcheck.log
 ```
 
-## Quản lý service
+## 🖥️ Quản lý Service
 
 ```bash
 systemctl status frpc      # Xem status
 systemctl restart frpc     # Restart
-systemctl stop frpc        # Dừng (để test health check)
-journalctl -u frpc -f      # Xem logs frpc
+systemctl stop frpc        # Dừng
+journalctl -u frpc -f      # Xem logs realtime
 cat /opt/frpc/frpc.toml    # Xem config
 ```
 
-## Yêu cầu FRP Server
+## ⚙️ Yêu cầu FRP Server
 
 ```toml
 # frps.toml
@@ -188,34 +157,36 @@ webServer.password = "admin123"
 
 **Lưu ý:**
 
-- `auth.token` trong frps.toml **PHẢI KHỚP** với token trong `--server "IP:PORT:TOKEN"`
+- `auth.token` trong frps.toml **PHẢI KHỚP** với token trong `--server`
 - Nếu không khớp → frpc báo lỗi "token mismatch"
 - Nếu port ngoài `allowPorts` → frpc báo lỗi "port not allowed"
 
-## Cấu trúc thư mục
+## 📁 Cấu trúc thư mục
 
 ```
 /opt/frpc/
-├── frpc                 # Binary
-├── frpc.toml            # Config
-├── healthcheck.sh       # Health check script
-├── .webhook_url         # Webhook URL (nếu có)
-├── .frpc_down           # Flag đánh dấu đang down
-└── .healthcheck_state   # Lịch sử restart
+├── frpc                    # Binary
+├── frpc.toml               # Config
+├── healthcheck.sh          # Health check script
+├── .webhook_url            # Webhook URL (nếu có)
+├── .frpc_down              # Flag đánh dấu đang down
+└── .healthcheck_state      # Lịch sử restart timestamps
 
 /var/log/
-└── frpc-healthcheck.log # Log health check
+├── frpc-healthcheck.log    # Log hiện tại
+├── frpc-healthcheck.log.1  # Backup 1
+├── frpc-healthcheck.log.2  # Backup 2
+└── frpc-healthcheck.log.3  # Backup 3
 
 /etc/systemd/system/
-└── frpc.service         # Systemd service
+└── frpc.service            # Systemd service
 ```
 
-## Troubleshooting
+## 🔧 Troubleshooting
 
 ### Token mismatch
 
 ```bash
-# Kiểm tra token
 grep token /opt/frpc/frpc.toml
 # Sửa nếu cần
 nano /opt/frpc/frpc.toml
@@ -233,12 +204,44 @@ systemctl restart frps
 ### Health check không gửi webhook
 
 ```bash
-# Kiểm tra file webhook
 cat /opt/frpc/.webhook_url
 # Nếu không có, thêm thủ công:
 echo "https://your-webhook-url" > /opt/frpc/.webhook_url
 ```
 
-## License
+### Xem logs chi tiết
+
+```bash
+# frpc logs
+journalctl -u frpc -n 50
+
+# Health check logs
+tail -50 /var/log/frpc-healthcheck.log
+```
+
+## 📊 Retry Mechanisms
+
+| Component | Attempts | Delays | Total Time |
+|-----------|----------|--------|------------|
+| Download | 3 | 3s each | ~10s |
+| Port selection | 3 | immediate | <10s |
+| Installation webhook | 5 | 20s, 40s, 80s, 160s | ~5 min |
+| Health check webhook | 3 | 5s, 10s | ~30s |
+
+## 📜 Version History
+
+| Version | Changes |
+|---------|---------|
+| v3.2 | Log rotation (1MB, 3 backups) |
+| v3.1 | Fix service creation order, remove wrong FRP check |
+| v3.0 | Add frpc_logs to webhooks |
+| v2.9 | Add frpc_logs to failed installation webhook |
+| v2.8 | Port try-and-retry (max 3 attempts) |
+| v2.7 | Improve webhook retry (5min install, 30s health) |
+| v2.6 | Add event field to installation webhook |
+| v2.5 | Health check webhook notifications |
+| v2.4 | Health check cron with rate limiting |
+
+## 📄 License
 
 MIT
