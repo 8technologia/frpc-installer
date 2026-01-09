@@ -519,6 +519,116 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 EOF
 
+# Create health check script with rate limiting
+log "Creating health check script..."
+cat > "$INSTALL_DIR/healthcheck.sh" << 'HEALTHCHECK_EOF'
+#!/bin/bash
+# frpc Health Check Script
+# Runs via cron, restarts frpc if down
+# Has rate limiting to prevent infinite restart loops
+
+INSTALL_DIR="/opt/frpc"
+LOG_FILE="/var/log/frpc-healthcheck.log"
+STATE_FILE="$INSTALL_DIR/.healthcheck_state"
+MAX_RESTARTS_PER_HOUR=5
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+# Get restart count in last hour
+get_restart_count() {
+    if [ ! -f "$STATE_FILE" ]; then
+        echo "0"
+        return
+    fi
+    
+    local one_hour_ago=$(date -d '1 hour ago' +%s 2>/dev/null || date -v-1H +%s 2>/dev/null)
+    local count=0
+    
+    while read timestamp; do
+        if [ "$timestamp" -gt "$one_hour_ago" ] 2>/dev/null; then
+            count=$((count + 1))
+        fi
+    done < "$STATE_FILE"
+    
+    echo "$count"
+}
+
+# Record restart
+record_restart() {
+    # Keep only last 10 entries
+    if [ -f "$STATE_FILE" ]; then
+        tail -9 "$STATE_FILE" > "${STATE_FILE}.tmp"
+        mv "${STATE_FILE}.tmp" "$STATE_FILE"
+    fi
+    date +%s >> "$STATE_FILE"
+}
+
+# Check if frpc is running and healthy
+check_frpc() {
+    # Check systemd status
+    if ! systemctl is-active --quiet frpc; then
+        return 1
+    fi
+    
+    # Check if proxies are registered
+    local status=$(curl -s --max-time 5 "http://127.0.0.1:7400/api/status" 2>/dev/null)
+    if [ -z "$status" ]; then
+        return 1
+    fi
+    
+    local running=$(echo "$status" | grep -c '"status":"running"' 2>/dev/null || echo "0")
+    if [ "$running" -lt 1 ]; then
+        return 1
+    fi
+    
+    return 0
+}
+
+# Main
+if check_frpc; then
+    # All good, exit silently
+    exit 0
+fi
+
+# frpc is down, check rate limit
+RESTART_COUNT=$(get_restart_count)
+
+if [ "$RESTART_COUNT" -ge "$MAX_RESTARTS_PER_HOUR" ]; then
+    log "ERROR: Rate limit reached ($RESTART_COUNT restarts in last hour). Manual intervention required."
+    log "Run: systemctl restart frpc"
+    exit 1
+fi
+
+# Restart frpc
+log "frpc is down. Restarting... (attempt $((RESTART_COUNT + 1))/$MAX_RESTARTS_PER_HOUR this hour)"
+systemctl restart frpc
+record_restart
+
+# Wait and verify
+sleep 5
+if check_frpc; then
+    log "frpc restarted successfully"
+else
+    log "WARNING: frpc may not be fully operational after restart"
+fi
+HEALTHCHECK_EOF
+
+chmod +x "$INSTALL_DIR/healthcheck.sh"
+
+# Setup cron job (every 2 minutes)
+log "Setting up health check cron job..."
+CRON_LINE="*/2 * * * * $INSTALL_DIR/healthcheck.sh"
+
+# Remove existing frpc healthcheck cron if exists
+crontab -l 2>/dev/null | grep -v "frpc.*healthcheck" > /tmp/crontab_tmp
+echo "$CRON_LINE" >> /tmp/crontab_tmp
+crontab /tmp/crontab_tmp
+rm /tmp/crontab_tmp
+
+log "Health check cron job installed (runs every 2 minutes)"
+
 # Enable and start service
 log "Enabling and starting frpc service..."
 systemctl daemon-reload
