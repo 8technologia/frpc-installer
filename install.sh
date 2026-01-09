@@ -260,26 +260,43 @@ if [ "$UNINSTALL" = true ]; then
     do_uninstall
 fi
 
-# Validate required --server parameter
-if [ -z "$SERVER_ADDR" ] || [ -z "$AUTH_TOKEN" ]; then
-    log "ERROR: --server parameter is required"
-    log ""
-    log "Usage: curl -fsSL .../install.sh | sudo bash -s -- --server \"IP:PORT:TOKEN\""
-    log "Example: --server \"103.166.185.156:7000:mytoken\""
-    exit 1
-fi
-
-log "Server: $SERVER_ADDR:$SERVER_PORT"
-
-# Feature 1: Check if already installed (update mode)
-if [ -f "$INSTALL_DIR/frpc" ]; then
-    if [ "$UPDATE_MODE" = true ]; then
-        log "Update mode: Existing installation found"
-        log "Backing up current config..."
-        cp "$INSTALL_DIR/frpc.toml" "$INSTALL_DIR/frpc.toml.bak" 2>/dev/null || true
-    else
+# Feature: Update mode - only update binary, keep config
+if [ "$UPDATE_MODE" = true ]; then
+    if [ ! -f "$INSTALL_DIR/frpc" ] || [ ! -f "$INSTALL_DIR/frpc.toml" ]; then
+        log "ERROR: frpc is not installed. Cannot update."
+        log "Use --server parameter to install first."
+        exit 1
+    fi
+    
+    log "Update mode: Updating frpc binary only..."
+    log "Existing config will be preserved."
+    
+    # Read server info from existing config for status display
+    SERVER_ADDR=$(grep "serverAddr" "$INSTALL_DIR/frpc.toml" | head -1 | cut -d'"' -f2)
+    SERVER_PORT=$(grep "serverPort" "$INSTALL_DIR/frpc.toml" | head -1 | awk '{print $3}')
+    
+    # Skip to binary download (set flag)
+    SKIP_CONFIG_GENERATION=true
+else
+    SKIP_CONFIG_GENERATION=false
+    
+    # Validate required --server parameter (only for fresh install)
+    if [ -z "$SERVER_ADDR" ] || [ -z "$AUTH_TOKEN" ]; then
+        log "ERROR: --server parameter is required"
+        log ""
+        log "Usage: curl -fsSL .../install.sh | sudo bash -s -- --server \"IP:PORT:TOKEN\""
+        log "Example: --server \"103.166.185.156:7000:mytoken\""
+        log ""
+        log "For update: curl -fsSL .../install.sh | sudo bash -s -- --update"
+        exit 1
+    fi
+    
+    log "Server: $SERVER_ADDR:$SERVER_PORT"
+    
+    # Check if already installed
+    if [ -f "$INSTALL_DIR/frpc" ]; then
         log "WARNING: frpc is already installed at $INSTALL_DIR"
-        log "Use --update to update, or --uninstall to remove first"
+        log "Use --update to update binary, or --uninstall to remove first"
         log ""
         log "Current config:"
         cat "$INSTALL_DIR/frpc.toml" 2>/dev/null | grep -E "^(name|remotePort|username)" | head -10
@@ -313,27 +330,6 @@ else
     log "Latest frpc version: $VERSION"
 fi
 
-# Generate random port suffix (001-999)
-PORT_SUFFIX=$(printf "%03d" $((RANDOM % 999 + 1)))
-SOCKS5_PORT="51${PORT_SUFFIX}"
-HTTP_PORT="52${PORT_SUFFIX}"
-ADMIN_PORT="53${PORT_SUFFIX}"
-
-log "Generated ports: SOCKS5=$SOCKS5_PORT, HTTP=$HTTP_PORT, Admin=$ADMIN_PORT"
-
-# Generate credentials
-PROXY_USER=$(generate_password)
-PROXY_PASS=$(generate_password)
-ADMIN_PASS=$(generate_password)
-
-log "Generated credentials"
-
-# Set box name
-if [ -z "$BOX_NAME" ]; then
-    BOX_NAME="Box-$(hostname)-${PORT_SUFFIX}"
-fi
-log "Box name: $BOX_NAME"
-
 # Download frpc with retry
 log "Downloading frpc v$VERSION for linux_$ARCH..."
 DOWNLOAD_URL="https://github.com/fatedier/frp/releases/download/v${VERSION}/frp_${VERSION}_linux_${ARCH}.tar.gz"
@@ -357,15 +353,38 @@ fi
 tar -xzf frp.tar.gz
 cd frp_${VERSION}_linux_${ARCH}
 
-# Install
+# Install binary
 log "Installing to $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 cp frpc "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/frpc"
 
-# Create config
-log "Creating configuration..."
-cat > "$INSTALL_DIR/frpc.toml" << EOF
+# Generate config only for fresh install (skip in update mode)
+if [ "$SKIP_CONFIG_GENERATION" = false ]; then
+    # Generate random port suffix (001-999)
+    PORT_SUFFIX=$(printf "%03d" $((RANDOM % 999 + 1)))
+    SOCKS5_PORT="51${PORT_SUFFIX}"
+    HTTP_PORT="52${PORT_SUFFIX}"
+    ADMIN_PORT="53${PORT_SUFFIX}"
+
+    log "Generated ports: SOCKS5=$SOCKS5_PORT, HTTP=$HTTP_PORT, Admin=$ADMIN_PORT"
+
+    # Generate credentials
+    PROXY_USER=$(generate_password)
+    PROXY_PASS=$(generate_password)
+    ADMIN_PASS=$(generate_password)
+
+    log "Generated credentials"
+
+    # Set box name
+    if [ -z "$BOX_NAME" ]; then
+        BOX_NAME="Box-$(hostname)-${PORT_SUFFIX}"
+    fi
+    log "Box name: $BOX_NAME"
+
+    # Create config
+    log "Creating configuration..."
+    cat > "$INSTALL_DIR/frpc.toml" << EOF
 serverAddr = "$SERVER_ADDR"
 serverPort = $SERVER_PORT
 loginFailExit = true
@@ -410,8 +429,11 @@ localIP = "127.0.0.1"
 localPort = 7400
 remotePort = $ADMIN_PORT
 EOF
+else
+    log "Keeping existing configuration..."
+fi
 
-# Create systemd service
+# Create systemd service (always update this)
 log "Creating systemd service..."
 cat > /etc/systemd/system/frpc.service << EOF
 [Unit]
