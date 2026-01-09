@@ -1,13 +1,7 @@
 #!/bin/bash
 #
-# FRPC Auto-Installer Script v2.1
+# FRPC Auto-Installer Script v3.2
 # Automatically installs and configures frpc with random ports
-#
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --server "IP:PORT:TOKEN"
-#   curl -fsSL ... | sudo bash -s -- --server "103.166.185.156:7000:mytoken" --name "Box-01"
-#   curl -fsSL ... | sudo bash -s -- --server "103.166.185.156:7000:mytoken" --webhook "https://webhook.site/xxx"
-#   curl -fsSL ... | sudo bash -s -- --uninstall
 #
 
 set -e
