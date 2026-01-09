@@ -807,8 +807,18 @@ if [ -n "$WEBHOOK_URL" ]; then
         BOX_NAME=$(grep -oP 'name = "\K[^"]+' "$INSTALL_DIR/frpc.toml" | head -1 | sed 's/ - SOCKS5//')
     fi
     
+    # Determine event type
+    if [ "$SKIP_CONFIG_GENERATION" = true ]; then
+        WEBHOOK_EVENT="update_complete"
+    elif [ "$STATUS" = "failed" ]; then
+        WEBHOOK_EVENT="install_failed"
+    else
+        WEBHOOK_EVENT="install_success"
+    fi
+    
     JSON_DATA=$(cat << EOF
 {
+  "event": "$WEBHOOK_EVENT",
   "timestamp": "$TIMESTAMP",
   "hostname": "$(hostname)",
   "box_name": "$BOX_NAME",

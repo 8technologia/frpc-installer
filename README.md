@@ -58,12 +58,24 @@ curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/
 
 ## Webhook Events
 
+| Event | Mô tả |
+|-------|-------|
+| `install_success` | Cài đặt thành công |
+| `install_failed` | Cài đặt thất bại |
+| `update_complete` | Cập nhật binary xong |
+| `frpc_down` | frpc ngừng hoạt động |
+| `frpc_up` | frpc khôi phục |
+| `frpc_rate_limit` | Đạt giới hạn restart |
+
 ### 1. Cài đặt thành công
 
 ```json
 {
+  "event": "install_success",
   "status": "success",
   "box_name": "Box-HaNoi-01",
+  "frpc_version": "0.66.0",
+  "public_ip": "123.45.67.89",
   "proxies": {
     "socks5": { "port": 51234, "username": "...", "password": "..." },
     "http": { "port": 52234, "username": "...", "password": "..." },
@@ -74,7 +86,18 @@ curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/
 }
 ```
 
-### 2. frpc Down
+### 2. Cập nhật binary
+
+```json
+{
+  "event": "update_complete",
+  "status": "success",
+  "box_name": "Box-HaNoi-01",
+  "frpc_version": "0.67.0"
+}
+```
+
+### 3. frpc Down (từ health check)
 
 ```json
 {
@@ -85,7 +108,7 @@ curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/
 }
 ```
 
-### 3. frpc Khôi phục
+### 4. frpc Khôi phục (từ health check)
 
 ```json
 {
@@ -95,7 +118,7 @@ curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/
 }
 ```
 
-### 4. Rate Limit
+### 5. Rate Limit (từ health check)
 
 ```json
 {
