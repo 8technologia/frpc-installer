@@ -156,23 +156,17 @@ verify_service() {
         if systemctl is-active --quiet frpc; then
             FRPC_RUNNING=true
             
-            # Try without auth first (localhost), then with auth
-            local status_response=$(curl -s --max-time 5 "http://127.0.0.1:7400/api/status" 2>/dev/null)
+            # Check admin API with auth
+            local status_response=$(curl -s --max-time 5 -u "$ADMIN_USER:$ADMIN_PASS" "http://127.0.0.1:7400/api/status" 2>/dev/null)
             
-            if [ -z "$status_response" ]; then
-                # Try with auth
-                status_response=$(curl -s --max-time 5 -u "$ADMIN_USER:$ADMIN_PASS" "http://127.0.0.1:7400/api/status" 2>/dev/null)
-            fi
-            
-            if [ -n "$status_response" ]; then
-                # Count running proxies (flexible pattern with/without spaces)
+            if [ -n "$status_response" ] && echo "$status_response" | grep -q "status"; then
+                # Count running proxies
                 PROXIES_RUNNING=$(echo "$status_response" | grep -oE '"status"\s*:\s*"running"' | wc -l)
                 
                 if [ "$PROXIES_RUNNING" -ge 3 ]; then
                     log "frpc service is running! $PROXIES_RUNNING proxies registered."
                     return 0
                 elif [ "$PROXIES_RUNNING" -ge 1 ]; then
-                    # At least 1 proxy running, might still be connecting
                     log "Proxies connecting... ($PROXIES_RUNNING/3 running)"
                 fi
             fi
