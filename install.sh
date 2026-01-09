@@ -519,21 +519,64 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 EOF
 
-# Create health check script with rate limiting
+# Create health check script with rate limiting and webhook
 log "Creating health check script..."
 cat > "$INSTALL_DIR/healthcheck.sh" << 'HEALTHCHECK_EOF'
 #!/bin/bash
 # frpc Health Check Script
 # Runs via cron, restarts frpc if down
 # Has rate limiting to prevent infinite restart loops
+# Sends webhook notifications on down/up events
 
 INSTALL_DIR="/opt/frpc"
 LOG_FILE="/var/log/frpc-healthcheck.log"
 STATE_FILE="$INSTALL_DIR/.healthcheck_state"
+WEBHOOK_FILE="$INSTALL_DIR/.webhook_url"
+DOWN_FLAG="$INSTALL_DIR/.frpc_down"
 MAX_RESTARTS_PER_HOUR=5
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+# Send webhook notification
+send_webhook() {
+    local event="$1"
+    local message="$2"
+    
+    if [ ! -f "$WEBHOOK_FILE" ]; then
+        return
+    fi
+    
+    local webhook_url=$(cat "$WEBHOOK_FILE")
+    if [ -z "$webhook_url" ]; then
+        return
+    fi
+    
+    local hostname=$(hostname)
+    local public_ip=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "unknown")
+    local timestamp=$(date -Iseconds)
+    
+    # Read box name from config
+    local box_name=$(grep -oP 'name = "\K[^"]+' "$INSTALL_DIR/frpc.toml" 2>/dev/null | head -1 | sed 's/ - SOCKS5//')
+    
+    local json_data=$(cat << EOF
+{
+  "event": "$event",
+  "message": "$message",
+  "timestamp": "$timestamp",
+  "hostname": "$hostname",
+  "box_name": "$box_name",
+  "public_ip": "$public_ip"
+}
+EOF
+)
+    
+    curl -s -X POST "$webhook_url" \
+        -H "Content-Type: application/json" \
+        -d "$json_data" --max-time 10 > /dev/null 2>&1
+    
+    log "Webhook sent: $event - $message"
 }
 
 # Get restart count in last hour
@@ -557,7 +600,6 @@ get_restart_count() {
 
 # Record restart
 record_restart() {
-    # Keep only last 10 entries
     if [ -f "$STATE_FILE" ]; then
         tail -9 "$STATE_FILE" > "${STATE_FILE}.tmp"
         mv "${STATE_FILE}.tmp" "$STATE_FILE"
@@ -567,12 +609,10 @@ record_restart() {
 
 # Check if frpc is running and healthy
 check_frpc() {
-    # Check systemd status
     if ! systemctl is-active --quiet frpc; then
         return 1
     fi
     
-    # Check if proxies are registered
     local status=$(curl -s --max-time 5 "http://127.0.0.1:7400/api/status" 2>/dev/null)
     if [ -z "$status" ]; then
         return 1
@@ -588,34 +628,55 @@ check_frpc() {
 
 # Main
 if check_frpc; then
-    # All good, exit silently
+    # frpc is running, check if it was previously down
+    if [ -f "$DOWN_FLAG" ]; then
+        rm -f "$DOWN_FLAG"
+        log "frpc is back online!"
+        send_webhook "frpc_up" "frpc recovered and is back online"
+    fi
     exit 0
 fi
 
-# frpc is down, check rate limit
+# frpc is down
+if [ ! -f "$DOWN_FLAG" ]; then
+    # First time detecting down
+    touch "$DOWN_FLAG"
+    log "frpc is DOWN!"
+    send_webhook "frpc_down" "frpc is not responding"
+fi
+
+# Check rate limit
 RESTART_COUNT=$(get_restart_count)
 
 if [ "$RESTART_COUNT" -ge "$MAX_RESTARTS_PER_HOUR" ]; then
     log "ERROR: Rate limit reached ($RESTART_COUNT restarts in last hour). Manual intervention required."
-    log "Run: systemctl restart frpc"
+    send_webhook "frpc_rate_limit" "Rate limit reached ($RESTART_COUNT restarts/hour). Manual intervention required."
     exit 1
 fi
 
 # Restart frpc
-log "frpc is down. Restarting... (attempt $((RESTART_COUNT + 1))/$MAX_RESTARTS_PER_HOUR this hour)"
+log "Restarting frpc... (attempt $((RESTART_COUNT + 1))/$MAX_RESTARTS_PER_HOUR this hour)"
 systemctl restart frpc
 record_restart
 
 # Wait and verify
 sleep 5
 if check_frpc; then
+    rm -f "$DOWN_FLAG"
     log "frpc restarted successfully"
+    send_webhook "frpc_up" "frpc restarted successfully"
 else
     log "WARNING: frpc may not be fully operational after restart"
 fi
 HEALTHCHECK_EOF
 
 chmod +x "$INSTALL_DIR/healthcheck.sh"
+
+# Save webhook URL if provided
+if [ -n "$WEBHOOK_URL" ]; then
+    echo "$WEBHOOK_URL" > "$INSTALL_DIR/.webhook_url"
+    log "Webhook URL saved for health check notifications"
+fi
 
 # Setup cron job (every 2 minutes)
 log "Setting up health check cron job..."
