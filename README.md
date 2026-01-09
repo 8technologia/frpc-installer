@@ -58,14 +58,14 @@ curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/
 
 ## Webhook Events
 
-| Event | Mô tả |
-|-------|-------|
-| `install_success` | Cài đặt thành công |
-| `install_failed` | Cài đặt thất bại |
-| `update_complete` | Cập nhật binary xong |
-| `frpc_down` | frpc ngừng hoạt động |
-| `frpc_up` | frpc khôi phục |
-| `frpc_rate_limit` | Đạt giới hạn restart |
+| Event | Mô tả | Có logs |
+|-------|-------|---------|
+| `install_success` | Cài đặt thành công | ❌ |
+| `install_failed` | Cài đặt thất bại | ✅ |
+| `update_complete` | Cập nhật binary xong | ❌ |
+| `frpc_down` | frpc ngừng hoạt động | ✅ |
+| `frpc_up` | frpc khôi phục | ❌ |
+| `frpc_rate_limit` | Đạt giới hạn restart | ✅ |
 
 ### 1. Cài đặt thành công
 
@@ -86,29 +86,29 @@ curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/
 }
 ```
 
-### 2. Cập nhật binary
+### 2. Cài đặt thất bại (có logs)
 
 ```json
 {
-  "event": "update_complete",
-  "status": "success",
-  "box_name": "Box-HaNoi-01",
-  "frpc_version": "0.67.0"
+  "event": "install_failed",
+  "status": "failed",
+  "error": "token mismatch",
+  "frpc_logs": "Jan 09 17:30:01 sv1 frpc[1234]: login failed|Jan 09 17:30:01 sv1 frpc[1234]: token mismatch|..."
 }
 ```
 
-### 3. frpc Down (từ health check)
+### 3. frpc Down (có logs)
 
 ```json
 {
   "event": "frpc_down",
   "message": "frpc is not responding",
   "box_name": "Box-HaNoi-01",
-  "timestamp": "2026-01-09T16:00:00+07:00"
+  "frpc_logs": "Jan 09 17:30:01 sv1 frpc[1234]: connection lost|..."
 }
 ```
 
-### 4. frpc Khôi phục (từ health check)
+### 4. frpc Khôi phục
 
 ```json
 {
@@ -118,12 +118,13 @@ curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/
 }
 ```
 
-### 5. Rate Limit (từ health check)
+### 5. Rate Limit (có logs)
 
 ```json
 {
   "event": "frpc_rate_limit",
-  "message": "Rate limit reached (5 restarts/hour). Manual intervention required."
+  "message": "Rate limit reached (5 restarts/hour). Manual intervention required.",
+  "frpc_logs": "..."
 }
 ```
 

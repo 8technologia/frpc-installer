@@ -1,20 +1,7 @@
 #!/bin/bash
-#
-# FRPC Auto-Installer Script v2.1
-# Automatically installs and configures frpc with random ports
-#
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/8technologia/frpc-installer/master/install.sh | sudo bash -s -- --server "IP:PORT:TOKEN"
-#   curl -fsSL ... | sudo bash -s -- --server "103.166.185.156:7000:mytoken" --name "Box-01"
-#   curl -fsSL ... | sudo bash -s -- --server "103.166.185.156:7000:mytoken" --webhook "https://webhook.site/xxx"
-#   curl -fsSL ... | sudo bash -s -- --uninstall
-#
 
 set -e
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 SERVER_ADDR=""
 SERVER_PORT="7000"
 AUTH_TOKEN=""
@@ -23,9 +10,6 @@ INSTALL_DIR="/opt/frpc"
 ADMIN_USER="admin"
 REQUIRED_SPACE_KB=50000  # 50MB
 
-# ============================================================
-# Parse arguments
-# ============================================================
 BOX_NAME=""
 WEBHOOK_URL=""
 UNINSTALL=false
@@ -34,7 +18,6 @@ UPDATE_MODE=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --server)
-            # Format: IP:PORT:TOKEN
             SERVER_ADDR=$(echo "$2" | cut -d':' -f1)
             SERVER_PORT=$(echo "$2" | cut -d':' -f2)
             AUTH_TOKEN=$(echo "$2" | cut -d':' -f3-)
@@ -62,9 +45,6 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# ============================================================
-# Helper functions
-# ============================================================
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
@@ -95,7 +75,6 @@ get_latest_version() {
     curl -s --max-time 10 https://api.github.com/repos/fatedier/frp/releases/latest 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/'
 }
 
-# Generate random ports (returns suffix)
 generate_ports() {
     PORT_SUFFIX=$(printf "%03d" $((RANDOM % 999 + 1)))
     SOCKS5_PORT="51${PORT_SUFFIX}"
@@ -104,7 +83,6 @@ generate_ports() {
     log "Generated ports: SOCKS5=$SOCKS5_PORT, HTTP=$HTTP_PORT, Admin=$ADMIN_PORT"
 }
 
-# Create frpc config file
 create_config() {
     cat > "$INSTALL_DIR/frpc.toml" << EOF
 serverAddr = "$SERVER_ADDR"
@@ -119,7 +97,6 @@ webServer.password = "$ADMIN_PASS"
 auth.method = "token"
 auth.token = "$AUTH_TOKEN"
 
-# SOCKS5 Proxy
 [[proxies]]
 name = "$BOX_NAME - SOCKS5"
 type = "tcp"
@@ -131,7 +108,6 @@ type = "socks5"
 username = "$PROXY_USER"
 password = "$PROXY_PASS"
 
-# HTTP Proxy
 [[proxies]]
 name = "$BOX_NAME - HTTP"
 type = "tcp"
@@ -143,7 +119,6 @@ type = "http_proxy"
 httpUser = "$PROXY_USER"
 httpPassword = "$PROXY_PASS"
 
-# Admin API
 [[proxies]]
 name = "$BOX_NAME - Admin"
 type = "tcp"
@@ -153,14 +128,12 @@ remotePort = $ADMIN_PORT
 EOF
 }
 
-# Check if frpc started successfully (for port retry)
 check_frpc_started() {
     sleep 3
     if ! systemctl is-active --quiet frpc; then
         return 1
     fi
     
-    # Check for port error in recent logs
     local recent_log=$(journalctl -u frpc -n 5 --no-pager 2>/dev/null)
     if echo "$recent_log" | grep -qiE "port.*already|port.*used|port not allowed"; then
         return 2  # Port conflict
@@ -173,7 +146,6 @@ check_frpc_started() {
     return 0
 }
 
-# Feature 2: Download with retry
 download_with_retry() {
     local url="$1"
     local output="$2"
@@ -192,13 +164,11 @@ download_with_retry() {
     return 1
 }
 
-# Feature 3: Verify checksum
 verify_download() {
     local file="$1"
     if [ ! -f "$file" ]; then
         return 1
     fi
-    # Check file is valid tar.gz
     if ! tar -tzf "$file" &>/dev/null; then
         log "ERROR: Downloaded file is corrupted"
         return 1
@@ -207,7 +177,6 @@ verify_download() {
     return 0
 }
 
-# Feature 5: Check network connectivity
 check_network() {
     log "Checking network connectivity..."
     if ! curl -s --max-time 10 https://github.com > /dev/null 2>&1; then
@@ -221,7 +190,6 @@ check_network() {
     log "Network connectivity OK"
 }
 
-# Feature 6: Verify service running with detailed status
 verify_service() {
     log "Verifying frpc service..."
     local max_attempts=15
@@ -234,11 +202,9 @@ verify_service() {
         if systemctl is-active --quiet frpc; then
             FRPC_RUNNING=true
             
-            # Check admin API with auth
             local status_response=$(curl -s --max-time 5 -u "$ADMIN_USER:$ADMIN_PASS" "http://127.0.0.1:7400/api/status" 2>/dev/null)
             
             if [ -n "$status_response" ] && echo "$status_response" | grep -q "status"; then
-                # Count running proxies
                 PROXIES_RUNNING=$(echo "$status_response" | grep -oE '"status"\s*:\s*"running"' | wc -l)
                 
                 if [ "$PROXIES_RUNNING" -ge 3 ]; then
@@ -254,8 +220,6 @@ verify_service() {
         sleep 2
     done
     
-    # If we get here, service is not fully operational
-    # Get error from journal
     ERROR_MESSAGE=$(journalctl -u frpc -n 10 --no-pager 2>/dev/null | grep -iE "error|failed|token|port" | tail -3 | tr '\n' ' ')
     
     if [ -z "$ERROR_MESSAGE" ]; then
@@ -267,7 +231,6 @@ verify_service() {
     return 1
 }
 
-# Retry frpc service with troubleshooting
 retry_frpc_service() {
     local max_retries=3
     log "Attempting to recover frpc service..."
@@ -275,23 +238,19 @@ retry_frpc_service() {
     for i in $(seq 1 $max_retries); do
         log "Retry attempt $i/$max_retries..."
         
-        # Restart service
         systemctl restart frpc
         sleep 5
         
-        # Verify
         if verify_service; then
             log "Recovery successful on attempt $i!"
             return 0
         fi
         
-        # If token error, can't retry
         if echo "$ERROR_MESSAGE" | grep -qi "token"; then
             log "ERROR: Token mismatch detected. Please check auth.token in config."
             return 1
         fi
         
-        # If port error, can't retry
         if echo "$ERROR_MESSAGE" | grep -qi "port not allowed\|port already"; then
             log "ERROR: Port issue detected. Check frps allowPorts configuration."
             return 1
@@ -304,7 +263,6 @@ retry_frpc_service() {
     return 1
 }
 
-# Feature 9: Check disk space
 check_disk_space() {
     log "Checking disk space..."
     local install_path=$(dirname "$INSTALL_DIR")
@@ -322,7 +280,6 @@ check_disk_space() {
     log "Disk space OK (${available}KB available)"
 }
 
-# Feature 7: Uninstall function
 do_uninstall() {
     log "=========================================="
     log "  FRPC Uninstaller"
@@ -355,7 +312,6 @@ do_uninstall() {
     exit 0
 }
 
-# Install dependencies
 install_dependencies() {
     local missing=()
     
@@ -384,25 +340,19 @@ install_dependencies() {
     fi
 }
 
-# ============================================================
-# Main
-# ============================================================
 log "=========================================="
 log "  FRPC Auto-Installer v2.1"
 log "=========================================="
 
-# Check root
 if [ "$EUID" -ne 0 ]; then
     log "ERROR: Please run as root (sudo)"
     exit 1
 fi
 
-# Feature 7: Handle uninstall (doesn't need --server)
 if [ "$UNINSTALL" = true ]; then
     do_uninstall
 fi
 
-# Feature: Update mode - only update binary, keep config
 if [ "$UPDATE_MODE" = true ]; then
     if [ ! -f "$INSTALL_DIR/frpc" ] || [ ! -f "$INSTALL_DIR/frpc.toml" ]; then
         log "ERROR: frpc is not installed. Cannot update."
@@ -413,16 +363,13 @@ if [ "$UPDATE_MODE" = true ]; then
     log "Update mode: Updating frpc binary only..."
     log "Existing config will be preserved."
     
-    # Read server info from existing config for status display
     SERVER_ADDR=$(grep "serverAddr" "$INSTALL_DIR/frpc.toml" | head -1 | cut -d'"' -f2)
     SERVER_PORT=$(grep "serverPort" "$INSTALL_DIR/frpc.toml" | head -1 | awk '{print $3}')
     
-    # Skip to binary download (set flag)
     SKIP_CONFIG_GENERATION=true
 else
     SKIP_CONFIG_GENERATION=false
     
-    # Validate required --server parameter (only for fresh install)
     if [ -z "$SERVER_ADDR" ] || [ -z "$AUTH_TOKEN" ]; then
         log "ERROR: --server parameter is required"
         log ""
@@ -435,7 +382,6 @@ else
     
     log "Server: $SERVER_ADDR:$SERVER_PORT"
     
-    # Check if already installed
     if [ -f "$INSTALL_DIR/frpc" ]; then
         log "WARNING: frpc is already installed at $INSTALL_DIR"
         log "Use --update to update binary, or --uninstall to remove first"
@@ -446,16 +392,12 @@ else
     fi
 fi
 
-# Install dependencies
 install_dependencies
 
-# Feature 5: Check network
 check_network
 
-# Feature 9: Check disk space
 check_disk_space
 
-# Detect architecture
 ARCH=$(get_arch)
 if [ "$ARCH" == "unsupported" ]; then
     log "ERROR: Unsupported architecture: $(uname -m)"
@@ -463,7 +405,6 @@ if [ "$ARCH" == "unsupported" ]; then
 fi
 log "Detected architecture: $ARCH"
 
-# Get latest version
 VERSION=$(get_latest_version)
 if [ -z "$VERSION" ]; then
     VERSION="0.66.0"
@@ -472,20 +413,17 @@ else
     log "Latest frpc version: $VERSION"
 fi
 
-# Download frpc with retry
 log "Downloading frpc v$VERSION for linux_$ARCH..."
 DOWNLOAD_URL="https://github.com/fatedier/frp/releases/download/v${VERSION}/frp_${VERSION}_linux_${ARCH}.tar.gz"
 TMP_DIR=$(mktemp -d)
 cd "$TMP_DIR"
 
-# Feature 2: Download with retry
 if ! download_with_retry "$DOWNLOAD_URL" "frp.tar.gz"; then
     log "ERROR: Failed to download frpc after multiple attempts"
     rm -rf "$TMP_DIR"
     exit 1
 fi
 
-# Feature 3: Verify download
 if ! verify_download "frp.tar.gz"; then
     log "ERROR: Download verification failed"
     rm -rf "$TMP_DIR"
@@ -495,32 +433,25 @@ fi
 tar -xzf frp.tar.gz
 cd frp_${VERSION}_linux_${ARCH}
 
-# Install binary
 log "Installing to $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 cp frpc "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/frpc"
 
-# Generate config only for fresh install (skip in update mode)
 if [ "$SKIP_CONFIG_GENERATION" = false ]; then
-    # Generate credentials (only once)
     PROXY_USER=$(generate_password)
     PROXY_PASS=$(generate_password)
     ADMIN_PASS=$(generate_password)
     log "Generated credentials"
 
-    # Set box name base (will add port suffix later if not provided)
     BOX_NAME_BASE="$BOX_NAME"
     
-    # Port retry loop (max 3 attempts)
     MAX_PORT_RETRIES=3
     PORT_RETRY_SUCCESS=false
     
     for port_attempt in $(seq 1 $MAX_PORT_RETRIES); do
-        # Generate random ports
         generate_ports
         
-        # Set box name with port suffix if not provided
         if [ -z "$BOX_NAME_BASE" ]; then
             BOX_NAME="Box-$(hostname)-${PORT_SUFFIX}"
         else
@@ -528,11 +459,9 @@ if [ "$SKIP_CONFIG_GENERATION" = false ]; then
         fi
         log "Box name: $BOX_NAME (port attempt $port_attempt/$MAX_PORT_RETRIES)"
         
-        # Create config
         log "Creating configuration..."
         create_config
         
-        # Start service and check
         log "Starting frpc to test ports..."
         systemctl daemon-reload
         systemctl restart frpc
@@ -545,16 +474,13 @@ if [ "$SKIP_CONFIG_GENERATION" = false ]; then
             PORT_RETRY_SUCCESS=true
             break
         elif [ "$START_RESULT" -eq 2 ]; then
-            # Port conflict - retry with new ports
             log "Port conflict detected! Regenerating ports..."
             systemctl stop frpc 2>/dev/null
             sleep 1
         elif [ "$START_RESULT" -eq 3 ]; then
-            # Token error - can't retry
             log "ERROR: Token mismatch. Check your --server token."
             break
         else
-            # Other error
             log "WARNING: frpc failed to start (unknown error)"
             break
         fi
@@ -567,7 +493,6 @@ else
     log "Keeping existing configuration..."
 fi
 
-# Create systemd service (always update this)
 log "Creating systemd service..."
 cat > /etc/systemd/system/frpc.service << EOF
 [Unit]
@@ -589,14 +514,9 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 EOF
 
-# Create health check script with rate limiting and webhook
 log "Creating health check script..."
 cat > "$INSTALL_DIR/healthcheck.sh" << 'HEALTHCHECK_EOF'
 #!/bin/bash
-# frpc Health Check Script
-# Runs via cron, restarts frpc if down
-# Has rate limiting to prevent infinite restart loops
-# Sends webhook notifications on down/up events
 
 INSTALL_DIR="/opt/frpc"
 LOG_FILE="/var/log/frpc-healthcheck.log"
@@ -609,7 +529,6 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
 }
 
-# Send webhook notification
 send_webhook() {
     local event="$1"
     local message="$2"
@@ -627,8 +546,12 @@ send_webhook() {
     local public_ip=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "unknown")
     local timestamp=$(date -Iseconds)
     
-    # Read box name from config
     local box_name=$(grep -oP 'name = "\K[^"]+' "$INSTALL_DIR/frpc.toml" 2>/dev/null | head -1 | sed 's/ - SOCKS5//')
+    
+    local frpc_logs=""
+    if [ "$event" = "frpc_down" ] || [ "$event" = "frpc_rate_limit" ]; then
+        frpc_logs=$(journalctl -u frpc -n 15 --no-pager 2>/dev/null | sed 's/"/\\"/g' | tr '\n' '|')
+    fi
     
     local json_data=$(cat << EOF
 {
@@ -637,12 +560,12 @@ send_webhook() {
   "timestamp": "$timestamp",
   "hostname": "$hostname",
   "box_name": "$box_name",
-  "public_ip": "$public_ip"
+  "public_ip": "$public_ip",
+  "frpc_logs": "$frpc_logs"
 }
 EOF
 )
     
-    # Retry webhook (3 attempts: 5s, 10s delays = ~30s max)
     local max_retries=3
     local delay=5
     
@@ -665,7 +588,6 @@ EOF
     log "WARNING: Failed to send webhook after $max_retries attempts"
 }
 
-# Get restart count in last hour
 get_restart_count() {
     if [ ! -f "$STATE_FILE" ]; then
         echo "0"
@@ -684,7 +606,6 @@ get_restart_count() {
     echo "$count"
 }
 
-# Record restart
 record_restart() {
     if [ -f "$STATE_FILE" ]; then
         tail -9 "$STATE_FILE" > "${STATE_FILE}.tmp"
@@ -693,7 +614,6 @@ record_restart() {
     date +%s >> "$STATE_FILE"
 }
 
-# Check if frpc is running and healthy
 check_frpc() {
     if ! systemctl is-active --quiet frpc; then
         return 1
@@ -712,9 +632,7 @@ check_frpc() {
     return 0
 }
 
-# Main
 if check_frpc; then
-    # frpc is running, check if it was previously down
     if [ -f "$DOWN_FLAG" ]; then
         rm -f "$DOWN_FLAG"
         log "frpc is back online!"
@@ -723,15 +641,12 @@ if check_frpc; then
     exit 0
 fi
 
-# frpc is down
 if [ ! -f "$DOWN_FLAG" ]; then
-    # First time detecting down
     touch "$DOWN_FLAG"
     log "frpc is DOWN!"
     send_webhook "frpc_down" "frpc is not responding"
 fi
 
-# Check rate limit
 RESTART_COUNT=$(get_restart_count)
 
 if [ "$RESTART_COUNT" -ge "$MAX_RESTARTS_PER_HOUR" ]; then
@@ -740,12 +655,10 @@ if [ "$RESTART_COUNT" -ge "$MAX_RESTARTS_PER_HOUR" ]; then
     exit 1
 fi
 
-# Restart frpc
 log "Restarting frpc... (attempt $((RESTART_COUNT + 1))/$MAX_RESTARTS_PER_HOUR this hour)"
 systemctl restart frpc
 record_restart
 
-# Wait and verify
 sleep 5
 if check_frpc; then
     rm -f "$DOWN_FLAG"
@@ -758,17 +671,14 @@ HEALTHCHECK_EOF
 
 chmod +x "$INSTALL_DIR/healthcheck.sh"
 
-# Save webhook URL if provided
 if [ -n "$WEBHOOK_URL" ]; then
     echo "$WEBHOOK_URL" > "$INSTALL_DIR/.webhook_url"
     log "Webhook URL saved for health check notifications"
 fi
 
-# Setup cron job (every 2 minutes)
 log "Setting up health check cron job..."
 CRON_LINE="*/2 * * * * $INSTALL_DIR/healthcheck.sh"
 
-# Remove existing frpc healthcheck cron if exists
 crontab -l 2>/dev/null | grep -v "frpc.*healthcheck" > /tmp/crontab_tmp
 echo "$CRON_LINE" >> /tmp/crontab_tmp
 crontab /tmp/crontab_tmp
@@ -776,26 +686,20 @@ rm /tmp/crontab_tmp
 
 log "Health check cron job installed (runs every 2 minutes)"
 
-# Enable service (start only if not already running from port retry)
 log "Enabling frpc service..."
 systemctl daemon-reload
 systemctl enable frpc
 
-# For fresh install: service already started in port retry loop
-# For update mode: need to restart
 if [ "$SKIP_CONFIG_GENERATION" = true ]; then
     log "Restarting frpc service..."
     systemctl restart frpc
 fi
 
-# Wait and verify
 sleep 2
 
-# Feature 6: Verify service with detailed status
 if verify_service; then
     STATUS="success"
 else
-    # Try recovery
     log "Initial verification failed. Attempting recovery..."
     if retry_frpc_service; then
         STATUS="recovered"
@@ -804,13 +708,10 @@ else
     fi
 fi
 
-# Cleanup temp files
 rm -rf "$TMP_DIR"
 
-# Get public IP
 PUBLIC_IP=$(curl -s --max-time 10 https://api.ipify.org 2>/dev/null || echo "unknown")
 
-# Print summary
 log "=========================================="
 if [ "$STATUS" = "success" ] || [ "$STATUS" = "recovered" ]; then
     log "  INSTALLATION COMPLETE"
@@ -853,7 +754,6 @@ echo "  Config:    cat $INSTALL_DIR/frpc.toml"
 echo "  Uninstall: curl -fsSL .../install.sh | sudo bash -s -- --uninstall"
 echo ""
 
-# Show troubleshooting if failed
 if [ "$STATUS" = "failed" ]; then
     echo "=========================================="
     echo "  TROUBLESHOOTING"
@@ -878,18 +778,14 @@ if [ "$STATUS" = "failed" ]; then
     echo ""
 fi
 
-# Send to webhook if provided (with retry and exponential backoff)
 if [ -n "$WEBHOOK_URL" ]; then
     log "Sending data to webhook..."
     
-    # Escape error message for JSON
     ESCAPED_ERROR=$(echo "$ERROR_MESSAGE" | sed 's/"/\\"/g' | tr '\n' ' ')
     
     TIMESTAMP=$(date -Iseconds)
     
-    # Build JSON with proper handling of update mode
     if [ "$SKIP_CONFIG_GENERATION" = true ]; then
-        # Update mode - read existing values from config
         SOCKS5_PORT=$(grep -oP 'remotePort = \K[0-9]+' "$INSTALL_DIR/frpc.toml" | head -1)
         HTTP_PORT=$(grep -oP 'remotePort = \K[0-9]+' "$INSTALL_DIR/frpc.toml" | head -2 | tail -1)
         ADMIN_PORT=$(grep -oP 'remotePort = \K[0-9]+' "$INSTALL_DIR/frpc.toml" | tail -1)
@@ -899,7 +795,6 @@ if [ -n "$WEBHOOK_URL" ]; then
         BOX_NAME=$(grep -oP 'name = "\K[^"]+' "$INSTALL_DIR/frpc.toml" | head -1 | sed 's/ - SOCKS5//')
     fi
     
-    # Determine event type
     if [ "$SKIP_CONFIG_GENERATION" = true ]; then
         WEBHOOK_EVENT="update_complete"
     elif [ "$STATUS" = "failed" ]; then
@@ -948,10 +843,8 @@ if [ -n "$WEBHOOK_URL" ]; then
 EOF
 )
     
-    # Get frpc logs if failed (for debugging)
     if [ "$STATUS" = "failed" ]; then
         FRPC_LOGS=$(journalctl -u frpc -n 20 --no-pager 2>/dev/null | sed 's/"/\\"/g' | tr '\n' '|')
-        # Re-build JSON with logs
         JSON_DATA=$(cat << EOF
 {
   "event": "$WEBHOOK_EVENT",
@@ -993,7 +886,6 @@ EOF
 )
     fi
     
-    # Retry with exponential backoff (5 attempts: 20s, 40s, 80s, 160s = ~5 minutes total)
     MAX_WEBHOOK_RETRIES=5
     WEBHOOK_DELAY=20
     WEBHOOK_SUCCESS=false
