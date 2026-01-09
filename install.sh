@@ -95,6 +95,84 @@ get_latest_version() {
     curl -s --max-time 10 https://api.github.com/repos/fatedier/frp/releases/latest 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/'
 }
 
+# Generate random ports (returns suffix)
+generate_ports() {
+    PORT_SUFFIX=$(printf "%03d" $((RANDOM % 999 + 1)))
+    SOCKS5_PORT="51${PORT_SUFFIX}"
+    HTTP_PORT="52${PORT_SUFFIX}"
+    ADMIN_PORT="53${PORT_SUFFIX}"
+    log "Generated ports: SOCKS5=$SOCKS5_PORT, HTTP=$HTTP_PORT, Admin=$ADMIN_PORT"
+}
+
+# Create frpc config file
+create_config() {
+    cat > "$INSTALL_DIR/frpc.toml" << EOF
+serverAddr = "$SERVER_ADDR"
+serverPort = $SERVER_PORT
+loginFailExit = true
+
+webServer.addr = "127.0.0.1"
+webServer.port = 7400
+webServer.user = "$ADMIN_USER"
+webServer.password = "$ADMIN_PASS"
+
+auth.method = "token"
+auth.token = "$AUTH_TOKEN"
+
+# SOCKS5 Proxy
+[[proxies]]
+name = "$BOX_NAME - SOCKS5"
+type = "tcp"
+remotePort = $SOCKS5_PORT
+transport.bandwidthLimit = "$BANDWIDTH_LIMIT"
+
+[proxies.plugin]
+type = "socks5"
+username = "$PROXY_USER"
+password = "$PROXY_PASS"
+
+# HTTP Proxy
+[[proxies]]
+name = "$BOX_NAME - HTTP"
+type = "tcp"
+remotePort = $HTTP_PORT
+transport.bandwidthLimit = "$BANDWIDTH_LIMIT"
+
+[proxies.plugin]
+type = "http_proxy"
+httpUser = "$PROXY_USER"
+httpPassword = "$PROXY_PASS"
+
+# Admin API
+[[proxies]]
+name = "$BOX_NAME - Admin"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 7400
+remotePort = $ADMIN_PORT
+EOF
+}
+
+# Check if frpc started successfully (for port retry)
+check_frpc_started() {
+    sleep 3
+    if ! systemctl is-active --quiet frpc; then
+        return 1
+    fi
+    
+    # Check for port error in recent logs
+    local recent_log=$(journalctl -u frpc -n 5 --no-pager 2>/dev/null)
+    if echo "$recent_log" | grep -qiE "port.*already|port.*used|port not allowed"; then
+        return 2  # Port conflict
+    fi
+    
+    if echo "$recent_log" | grep -qi "token"; then
+        return 3  # Token error
+    fi
+    
+    return 0
+}
+
 # Feature 2: Download with retry
 download_with_retry() {
     local url="$1"
@@ -425,74 +503,66 @@ chmod +x "$INSTALL_DIR/frpc"
 
 # Generate config only for fresh install (skip in update mode)
 if [ "$SKIP_CONFIG_GENERATION" = false ]; then
-    # Generate random port suffix (001-999)
-    PORT_SUFFIX=$(printf "%03d" $((RANDOM % 999 + 1)))
-    SOCKS5_PORT="51${PORT_SUFFIX}"
-    HTTP_PORT="52${PORT_SUFFIX}"
-    ADMIN_PORT="53${PORT_SUFFIX}"
-
-    log "Generated ports: SOCKS5=$SOCKS5_PORT, HTTP=$HTTP_PORT, Admin=$ADMIN_PORT"
-
-    # Generate credentials
+    # Generate credentials (only once)
     PROXY_USER=$(generate_password)
     PROXY_PASS=$(generate_password)
     ADMIN_PASS=$(generate_password)
-
     log "Generated credentials"
 
-    # Set box name
-    if [ -z "$BOX_NAME" ]; then
-        BOX_NAME="Box-$(hostname)-${PORT_SUFFIX}"
+    # Set box name base (will add port suffix later if not provided)
+    BOX_NAME_BASE="$BOX_NAME"
+    
+    # Port retry loop (max 3 attempts)
+    MAX_PORT_RETRIES=3
+    PORT_RETRY_SUCCESS=false
+    
+    for port_attempt in $(seq 1 $MAX_PORT_RETRIES); do
+        # Generate random ports
+        generate_ports
+        
+        # Set box name with port suffix if not provided
+        if [ -z "$BOX_NAME_BASE" ]; then
+            BOX_NAME="Box-$(hostname)-${PORT_SUFFIX}"
+        else
+            BOX_NAME="$BOX_NAME_BASE"
+        fi
+        log "Box name: $BOX_NAME (port attempt $port_attempt/$MAX_PORT_RETRIES)"
+        
+        # Create config
+        log "Creating configuration..."
+        create_config
+        
+        # Start service and check
+        log "Starting frpc to test ports..."
+        systemctl daemon-reload
+        systemctl restart frpc
+        
+        check_frpc_started
+        START_RESULT=$?
+        
+        if [ "$START_RESULT" -eq 0 ]; then
+            log "Ports verified successfully!"
+            PORT_RETRY_SUCCESS=true
+            break
+        elif [ "$START_RESULT" -eq 2 ]; then
+            # Port conflict - retry with new ports
+            log "Port conflict detected! Regenerating ports..."
+            systemctl stop frpc 2>/dev/null
+            sleep 1
+        elif [ "$START_RESULT" -eq 3 ]; then
+            # Token error - can't retry
+            log "ERROR: Token mismatch. Check your --server token."
+            break
+        else
+            # Other error
+            log "WARNING: frpc failed to start (unknown error)"
+            break
+        fi
+    done
+    
+    if [ "$PORT_RETRY_SUCCESS" = false ]; then
+        log "WARNING: Could not find available ports after $MAX_PORT_RETRIES attempts"
     fi
-    log "Box name: $BOX_NAME"
-
-    # Create config
-    log "Creating configuration..."
-    cat > "$INSTALL_DIR/frpc.toml" << EOF
-serverAddr = "$SERVER_ADDR"
-serverPort = $SERVER_PORT
-loginFailExit = true
-
-webServer.addr = "127.0.0.1"
-webServer.port = 7400
-webServer.user = "$ADMIN_USER"
-webServer.password = "$ADMIN_PASS"
-
-auth.method = "token"
-auth.token = "$AUTH_TOKEN"
-
-# SOCKS5 Proxy
-[[proxies]]
-name = "$BOX_NAME - SOCKS5"
-type = "tcp"
-remotePort = $SOCKS5_PORT
-transport.bandwidthLimit = "$BANDWIDTH_LIMIT"
-
-[proxies.plugin]
-type = "socks5"
-username = "$PROXY_USER"
-password = "$PROXY_PASS"
-
-# HTTP Proxy
-[[proxies]]
-name = "$BOX_NAME - HTTP"
-type = "tcp"
-remotePort = $HTTP_PORT
-transport.bandwidthLimit = "$BANDWIDTH_LIMIT"
-
-[proxies.plugin]
-type = "http_proxy"
-httpUser = "$PROXY_USER"
-httpPassword = "$PROXY_PASS"
-
-# Admin API
-[[proxies]]
-name = "$BOX_NAME - Admin"
-type = "tcp"
-localIP = "127.0.0.1"
-localPort = 7400
-remotePort = $ADMIN_PORT
-EOF
 else
     log "Keeping existing configuration..."
 fi
@@ -706,14 +776,20 @@ rm /tmp/crontab_tmp
 
 log "Health check cron job installed (runs every 2 minutes)"
 
-# Enable and start service
-log "Enabling and starting frpc service..."
+# Enable service (start only if not already running from port retry)
+log "Enabling frpc service..."
 systemctl daemon-reload
 systemctl enable frpc
-systemctl restart frpc
 
-# Wait a moment for initial connection
-sleep 3
+# For fresh install: service already started in port retry loop
+# For update mode: need to restart
+if [ "$SKIP_CONFIG_GENERATION" = true ]; then
+    log "Restarting frpc service..."
+    systemctl restart frpc
+fi
+
+# Wait and verify
+sleep 2
 
 # Feature 6: Verify service with detailed status
 if verify_service; then
